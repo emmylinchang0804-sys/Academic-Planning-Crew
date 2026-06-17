@@ -511,6 +511,14 @@ def tab_progress(store):
 def tab_memory(store):
     st.markdown('<div class="section-title">Memoria y estructura</div>', unsafe_allow_html=True)
     st.caption("La logica de agentes vive en `src/academic_planning`: crew, config, tools, memory, models y workflows.")
+    with st.expander("Reiniciar todo", expanded=False):
+        st.warning("Esto borra horarios, eventos, actividades, to-dos, chat y bitacora.")
+        keep_profile = st.checkbox("Conservar perfil", value=True, key="memory_keep_profile")
+        confirm = st.checkbox("Confirmo que quiero reiniciar la app", key="memory_confirm_reset")
+        if st.button("Reiniciar memoria completa", use_container_width=True, disabled=not confirm):
+            reset_store(keep_profile=keep_profile)
+            st.success("Memoria reiniciada.")
+            st.rerun()
     st.subheader("Bitacora de agentes")
     st.dataframe(pd.DataFrame(store["agent_log"]), use_container_width=True, hide_index=True)
     st.download_button("Descargar memoria JSON", json.dumps(store, ensure_ascii=False, indent=2), file_name="academic_planning_memory.json")
