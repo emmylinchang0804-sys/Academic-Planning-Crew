@@ -21,6 +21,10 @@ STORE_PATH = DATA_DIR / "academic_planning_store.json"
 load_dotenv(APP_DIR)
 
 DAYS_ES = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
+MONTHS_ES = [
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+]
 DAY_ALIASES = {
     "lunes": 0, "martes": 1, "miercoles": 2, "miércoles": 2, "jueves": 3,
     "viernes": 4, "sabado": 5, "sábado": 5, "domingo": 6,
@@ -188,6 +192,8 @@ def apply_css():
         .subtle {font-size:.76rem; color:#667085;}
         .todo-list-day {border:1px solid #e4e7ec; background:#fff; border-radius:8px; padding:10px 12px; margin-bottom:10px;}
         .todo-row-note {font-size:.76rem; color:#667085; margin-top:-8px; margin-bottom:4px;}
+        .todo-overdue [data-testid="stTextInput"] input {color:#b42318; border-color:#fecdca; background:#fff5f5;}
+        .todo-overdue div[data-testid="stDateInput"] input {color:#b42318;}
         .todo-done input {opacity:.7;}
         .todo-done [data-testid="stTextInput"] input {text-decoration:line-through; color:#98a2b3; background:#f8fafc;}
         div[data-testid="stTextInput"] input {font-size:.86rem;}
@@ -286,12 +292,19 @@ def manual_schedule_form(store):
 
 def tab_week(store):
     selected = st.date_input("Semana", value=date.today())
+    start = week_start(selected)
+    end = start + timedelta(days=6)
+    st.caption(f"Semana del {start.strftime('%d/%m')} al {end.strftime('%d/%m')}")
     render_week(store, selected)
     manual_schedule_form(store)
 
 
 def tab_month(store):
-    selected = st.date_input("Mes", value=date.today(), key="month")
+    m1, m2 = st.columns([1, .5])
+    month_name = m1.selectbox("Mes", MONTHS_ES, index=date.today().month - 1, key="month_name")
+    year = m2.number_input("Año", min_value=2020, max_value=2100, value=date.today().year, step=1, key="month_year")
+    selected = date(int(year), MONTHS_ES.index(month_name) + 1, 1)
+    st.markdown(f"<div class='section-title'>{month_name} {int(year)}</div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 3])
     with c1.popover("Agregar evento"):
         with st.form("event_form", clear_on_submit=True):
@@ -330,6 +343,21 @@ def tab_month(store):
             html += "</div>"
             cols[i].markdown(html, unsafe_allow_html=True)
 
+    month_events = sorted(
+        [event for event in store["events"] if parse_date(event.get("date")) and parse_date(event.get("date")).year == selected.year and parse_date(event.get("date")).month == selected.month],
+        key=lambda event: event.get("date", ""),
+    )
+    if month_events:
+        with st.expander("Eventos del mes", expanded=False):
+            for event in month_events:
+                cols = st.columns([2.6, 1, .7])
+                cols[0].write(f"{event.get('icon', chr(0x1F4CC))} {event.get('title', '')}")
+                cols[1].write(event.get("date", ""))
+                if cols[2].button("Eliminar", key=f"del_event_{event['event_id']}"):
+                    store["events"] = [item for item in store["events"] if item.get("event_id") != event["event_id"]]
+                    save_store(store)
+                    st.rerun()
+
 def todos_for_day(store, d):
     items = [item for item in store["todo_items"] if item.get("date") == d.isoformat()]
     return sorted(items, key=lambda item: (bool(item.get("done")), int(item.get("order", 0))))
@@ -358,36 +386,55 @@ def update_reading_progress(store, item, pages_done):
     activity = next((a for a in store["activities"] if a.get("activity_id") == activity_id), None)
     if not activity or actual_end >= planned_end:
         return
-    future = [t for t in store["todo_items"] if t.get("activity_id") == activity_id and t.get("date", "") > item.get("date", "")]
+    future = [
+        t for t in store["todo_items"]
+        if t.get("activity_id") == activity_id
+        and t.get("todo_id") != item.get("todo_id")
+        and not t.get("done")
+        and t.get("date", "") > item.get("date", "")
+    ]
     for old in future:
         store["todo_items"].remove(old)
     remaining_start = actual_end + 1
     total_pages = int(activity.get("metadata", {}).get("total_pages", planned_end))
     deadline = parse_date(activity.get("deadline")) or date.today()
     new_items = redistribute_reading_plan(activity_id, activity.get("title", "Lectura"), remaining_start, total_pages, date.today() + timedelta(days=1), deadline)
-    store["todo_items"].extend(new_items)
+    existing_keys = {
+        (todo.get("activity_id"), todo.get("date"), todo.get("title"))
+        for todo in store["todo_items"]
+    }
+    clean_items = []
+    for new_item in new_items:
+        key = (new_item.get("activity_id"), new_item.get("date"), new_item.get("title"))
+        if key in existing_keys:
+            continue
+        new_item["order"] = len(store["todo_items"]) + len(clean_items)
+        clean_items.append(new_item)
+    store["todo_items"].extend(clean_items)
 
 
 def tab_todo(store):
     selected = st.date_input("Semana de To-do", value=date.today(), key="todo_week")
     start = week_start(selected)
+    end = start + timedelta(days=6)
     days = [start + timedelta(days=i) for i in range(7)]
     st.markdown('<div class="section-title">To-do semanal</div>', unsafe_allow_html=True)
+    st.caption(f"Semana del {start.strftime('%d/%m')} al {end.strftime('%d/%m')}")
 
     with st.form("manual_todo", clear_on_submit=True):
-        c1, c2, c3, c4 = st.columns([2.4, 1, 1, .8])
+        c1, c2, c3 = st.columns([2.4, 1, 1])
         title = c1.text_input("Nuevo pendiente", placeholder="Leer paginas 1-62, revisar ensayo...")
         selected_day = c2.selectbox("Dia", DAYS_ES, index=date.today().weekday())
         course = c3.text_input("Materia", value="General")
-        color = c4.color_picker("Color", "#2563eb")
         if st.form_submit_button("Agregar pendiente", use_container_width=True) and title:
             target_date = days[DAYS_ES.index(selected_day)]
+            course_id = ensure_course(store, course)
             store["todo_items"].append({
                 "todo_id": make_id("todo"),
                 "title": title,
                 "date": target_date.isoformat(),
                 "course": course,
-                "color": color,
+                "color": course_color(store, course_id),
                 "done": False,
                 "order": len(store["todo_items"]),
                 "activity_id": "",
@@ -401,12 +448,15 @@ def tab_todo(store):
         if not items:
             st.caption("Sin pendientes")
         for item in items:
-            row_class = "todo-done" if item.get("done") else ""
+            is_overdue = not item.get("done") and item.get("date", "") < date.today().isoformat()
+            row_class = "todo-done" if item.get("done") else "todo-overdue" if is_overdue else ""
             st.markdown(f"<div class='{row_class}'>", unsafe_allow_html=True)
             cols = st.columns([0.12, 2.8, .7, .42, .42, .55])
             done = cols[0].checkbox("", value=bool(item.get("done")), key=f"done_inline_{item['todo_id']}")
             title = cols[1].text_input("Actividad", value=item.get("title", ""), key=f"title_inline_{item['todo_id']}", label_visibility="collapsed")
             new_date = cols[2].date_input("Fecha", value=parse_date(item.get("date")) or d, key=f"date_inline_{item['todo_id']}", label_visibility="collapsed")
+            if is_overdue:
+                cols[1].markdown("<span style='color:#b42318;font-size:.74rem;font-weight:700'>Vencida</span>", unsafe_allow_html=True)
             changed = done != bool(item.get("done")) or title != item.get("title") or new_date.isoformat() != item.get("date")
             if changed:
                 item["done"] = done
