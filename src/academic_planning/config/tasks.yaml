@@ -1,1 +1,20 @@
+classify_student_request:
+  agent: academic_coordinator
+  expected_output: "request_type, workflow, required_agents"
+
+analyze_academic_activity:
+  agent: task_analyzer
+  expected_output: "activity_type, deadline, estimated_hours, complexity, priority, missing_information"
+
+decompose_activity:
+  agent: task_analyzer
+  expected_output: "subtasks/todo_items with dates, page ranges or project phases"
+
+build_weekly_todo_plan:
+  agent: academic_planner
+  expected_output: "todo_items distributed only on today/future dates"
+
+monitor_progress:
+  agent: progress_monitor
+  expected_output: "completion, remaining work, replanning recommendation"
 

@@ -1,0 +1,2 @@
+"""Academic Planning Crew package."""
+
