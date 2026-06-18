@@ -1,4 +1,6 @@
-﻿import json
+﻿import base64
+import html as html_lib
+import json
 import os
 import sys
 import uuid
@@ -29,7 +31,23 @@ DAY_ALIASES = {
     "lunes": 0, "martes": 1, "miercoles": 2, "miércoles": 2, "jueves": 3,
     "viernes": 4, "sabado": 5, "sábado": 5, "domingo": 6,
 }
-COURSE_PALETTE = ["#2563eb", "#0f766e", "#9333ea", "#dc6803", "#c11574", "#087443", "#175cd3", "#b42318"]
+SCHEDULE_COLOR_PALETTE = [
+    ("Azul cielo", "#60a5fa"),
+    ("Azul tinta", "#2563eb"),
+    ("Menta", "#5eead4"),
+    ("Verde hoja", "#22c55e"),
+    ("Lavanda", "#a78bfa"),
+    ("Uva", "#9333ea"),
+    ("Rosa", "#f472b6"),
+    ("Fucsia", "#c11574"),
+    ("Coral", "#fb7185"),
+    ("Naranja", "#fb923c"),
+    ("Amarillo", "#facc15"),
+    ("Turquesa", "#06b6d4"),
+    ("Gris suave", "#94a3b8"),
+    ("Grafito", "#475467"),
+]
+COURSE_PALETTE = [color for _, color in SCHEDULE_COLOR_PALETTE]
 EVENT_TYPES = {
     "Entrega": {"icon": chr(0x1F4CC), "color": "#2563eb", "meaning": "entrega"},
     "Examen": {"icon": chr(0x1F4DD), "color": "#dc2626", "meaning": "examen"},
@@ -75,6 +93,8 @@ def load_store():
     for key, value in default_store().items():
         store.setdefault(key, value)
     store.setdefault("todo_items", [])
+    store.setdefault("settings", {})
+    store["settings"].setdefault("custom_schedule_colors", [])
     return store
 
 
@@ -114,14 +134,249 @@ def parse_date(value):
 def parse_time(value):
     if isinstance(value, time):
         return value
+    if isinstance(value, datetime):
+        return value.time().replace(second=0, microsecond=0)
+    if pd.isna(value):
+        return None
+    if isinstance(value, (int, float)) and 0 <= float(value) < 1:
+        return time_from_minutes(round(float(value) * 24 * 60))
     if not value:
         return None
-    for fmt in ("%H:%M", "%H"):
+    for fmt in ("%H:%M", "%H:%M:%S", "%H"):
         try:
-            return datetime.strptime(str(value), fmt).time()
+            return datetime.strptime(str(value).strip(), fmt).time()
         except ValueError:
             pass
+    parsed = pd.to_datetime(value, errors="coerce")
+    if not pd.isna(parsed):
+        return parsed.time().replace(second=0, microsecond=0)
     return None
+
+
+def normalize_day(value):
+    text = str(value or "").strip().lower()
+    aliases = {
+        "lunes": "Lunes", "lun": "Lunes",
+        "martes": "Martes", "mar": "Martes",
+        "miercoles": "Miercoles", "miércoles": "Miercoles", "mie": "Miercoles", "mié": "Miercoles",
+        "jueves": "Jueves", "jue": "Jueves",
+        "viernes": "Viernes", "vie": "Viernes",
+        "sabado": "Sabado", "sábado": "Sabado", "sab": "Sabado", "sáb": "Sabado",
+        "domingo": "Domingo", "dom": "Domingo",
+    }
+    return aliases.get(text)
+
+
+def normalize_schedule_columns(df):
+    mapping = {}
+    for col in df.columns:
+        raw = str(col).strip().lower()
+        if raw in {"dia", "día", "day"}:
+            mapping["day"] = col
+        elif raw in {"inicio", "start", "hora inicio", "empieza"}:
+            mapping["start"] = col
+        elif raw in {"fin", "end", "hora fin", "termina"}:
+            mapping["end"] = col
+        elif raw in {"nombre", "materia", "curso", "clase", "actividad"}:
+            mapping["title"] = col
+        elif raw in {"tipo", "categoria", "categoría"}:
+            mapping["type"] = col
+        elif raw in {"color", "colour"}:
+            mapping["color"] = col
+    return mapping
+
+
+def read_schedule_file(uploaded_file):
+    suffix = Path(uploaded_file.name).suffix.lower()
+    if suffix in {".csv", ".txt"}:
+        return pd.read_csv(uploaded_file, sep=None, engine="python")
+    if suffix in {".xlsx", ".xls"}:
+        return pd.read_excel(uploaded_file)
+    return pd.DataFrame()
+
+
+def json_from_text(text):
+    clean = (text or "").strip()
+    if clean.startswith("```"):
+        clean = clean.strip("`")
+        clean = clean.replace("json\n", "", 1).replace("JSON\n", "", 1).strip()
+    start = clean.find("{")
+    end = clean.rfind("}")
+    if start >= 0 and end >= start:
+        clean = clean[start:end + 1]
+    return json.loads(clean)
+
+
+def schedule_df_from_markdown(text):
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip().startswith("|")]
+    data = []
+    for line in lines:
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if not cells or all(set(cell) <= {"-", ":"} for cell in cells):
+            continue
+        data.append(cells)
+    if len(data) < 2:
+        return pd.DataFrame(columns=["dia", "inicio", "fin", "nombre", "tipo"])
+    headers = [h.lower().replace("día", "dia") for h in data[0]]
+    rows = []
+    for cells in data[1:]:
+        if len(cells) < len(headers):
+            cells.extend([""] * (len(headers) - len(cells)))
+        rows.append(dict(zip(headers, cells[:len(headers)])))
+    df = pd.DataFrame(rows)
+    wanted = ["dia", "inicio", "fin", "nombre", "tipo"]
+    for col in wanted:
+        if col not in df.columns:
+            df[col] = "Clase" if col == "tipo" else ""
+    return df[wanted]
+
+
+def schedule_rows_from_simple_table(df, default_color="#2563eb"):
+    clean = df.copy()
+    clean.columns = [str(col).strip().lower().replace("día", "dia") for col in clean.columns]
+    clean = clean.rename(columns={
+        "day": "dia",
+        "start": "inicio",
+        "end": "fin",
+        "title": "nombre",
+        "materia": "nombre",
+        "clase": "nombre",
+        "type": "tipo",
+    })
+    for col in ["dia", "inicio", "fin", "nombre", "tipo"]:
+        if col not in clean.columns:
+            clean[col] = "Clase" if col == "tipo" else ""
+    items = []
+    for _, row in clean.iterrows():
+        items.append({
+            "dia": row.get("dia", ""),
+            "inicio": row.get("inicio", ""),
+            "fin": row.get("fin", ""),
+            "nombre": row.get("nombre", ""),
+            "tipo": row.get("tipo", "Clase"),
+        })
+    return schedule_rows_from_items(items, default_color=default_color)
+
+
+def schedule_rows_from_df(df):
+    mapping = normalize_schedule_columns(df)
+    rows = []
+    errors = []
+    required = {"day", "start", "end", "title"}
+    if not required.issubset(mapping):
+        missing = ", ".join(sorted(required - set(mapping)))
+        return [], [f"Faltan columnas: {missing}. Usa dia, inicio, fin, nombre."]
+    for idx, row in df.iterrows():
+        day = normalize_day(row.get(mapping["day"]))
+        start_time = parse_time(str(row.get(mapping["start"], "")).strip())
+        end_time = parse_time(str(row.get(mapping["end"], "")).strip())
+        title = str(row.get(mapping["title"], "")).strip()
+        typ = str(row.get(mapping.get("type", ""), "Clase")).strip() or "Clase"
+        color = str(row.get(mapping.get("color", ""), "#2563eb")).strip() or "#2563eb"
+        if not day or not start_time or not end_time or minutes(end_time) <= minutes(start_time):
+            errors.append(f"Fila {idx + 1}: revisa dia, inicio y fin.")
+            continue
+        if not color.startswith("#") or len(color) != 7:
+            color = "#2563eb"
+        rows.append({
+            "availability_id": make_id("av"),
+            "title": title or typ,
+            "day_index": DAYS_ES.index(day),
+            "day_of_week": day,
+            "start_time": start_time.strftime("%H:%M"),
+            "end_time": end_time.strftime("%H:%M"),
+            "availability_type": typ,
+            "color": color,
+        })
+    return rows, errors
+
+
+def schedule_rows_from_items(items, default_color="#2563eb"):
+    rows = []
+    errors = []
+    for idx, item in enumerate(items or []):
+        day = normalize_day(item.get("dia") or item.get("day") or item.get("day_of_week"))
+        start_time = parse_time(item.get("inicio") or item.get("start") or item.get("start_time"))
+        end_time = parse_time(item.get("fin") or item.get("end") or item.get("end_time"))
+        title = str(item.get("nombre") or item.get("title") or item.get("materia") or item.get("clase") or "").strip()
+        typ = str(item.get("tipo") or item.get("type") or "Clase").strip() or "Clase"
+        color = str(item.get("color") or default_color or "#2563eb").strip()
+        if not day or not start_time or not end_time or minutes(end_time) <= minutes(start_time):
+            errors.append(f"Elemento {idx + 1}: revisa dia, inicio y fin.")
+            continue
+        if not color.startswith("#") or len(color) != 7:
+            color = default_color
+        rows.append({
+            "availability_id": make_id("av"),
+            "title": title or typ,
+            "day_index": DAYS_ES.index(day),
+            "day_of_week": day,
+            "start_time": start_time.strftime("%H:%M"),
+            "end_time": end_time.strftime("%H:%M"),
+            "availability_type": typ,
+            "color": color,
+        })
+    return rows, errors
+
+
+def read_schedule_image(uploaded_file, default_color="#2563eb"):
+    load_dotenv(APP_DIR)
+    if not os.environ.get("OPENAI_API_KEY"):
+        return [], ["Falta OPENAI_API_KEY en .env para leer horarios desde imagen."]
+    prompt = (
+        "Lee esta imagen de un horario academico y conviertela primero en una tabla limpia. "
+        "Extrae solo clases o bloques fijos; ignora pausas, almuerzo, nombres de docentes, numeros de periodo y encabezados. "
+        "Devuelve SOLO una tabla Markdown con columnas: dia | inicio | fin | nombre | tipo. "
+        "Usa dias en espanol y horas en formato 24h HH:MM. Si una celda ocupa varios periodos, usa la hora inicial y final completa. "
+        "Si una hora o dia no se ve claro, omite ese bloque. No agregues explicaciones."
+    )
+    raw = uploaded_file.getvalue()
+    mime = uploaded_file.type or "image/png"
+    image_url = f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+    model = os.environ.get("OPENAI_VISION_MODEL") or os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
+    errors = []
+    try:
+        from openai import OpenAI
+        client = OpenAI()
+
+        try:
+            response = client.responses.create(
+                model=model,
+                input=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {"type": "input_image", "image_url": image_url},
+                    ],
+                }],
+            )
+            table_text = response.output_text.strip()
+            df = schedule_df_from_markdown(table_text)
+            rows, row_errors = schedule_rows_from_simple_table(df, default_color=default_color)
+            return rows, errors + row_errors, table_text
+        except Exception as exc:
+            errors.append(f"Responses API: {exc}")
+
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                }],
+            )
+            table_text = (response.choices[0].message.content or "").strip()
+            df = schedule_df_from_markdown(table_text)
+            rows, row_errors = schedule_rows_from_simple_table(df, default_color=default_color)
+            return rows, errors + row_errors, table_text
+        except Exception as exc:
+            errors.append(f"Chat Completions: {exc}")
+            return [], errors, ""
+    except Exception as exc:
+        return [], [f"No pude iniciar OpenAI: {exc}"], ""
 
 
 def week_start(selected):
@@ -130,6 +385,92 @@ def week_start(selected):
 
 def minutes(t):
     return t.hour * 60 + t.minute
+
+
+def time_from_minutes(total):
+    total = max(0, min(int(total), 23 * 60 + 59))
+    return time(total // 60, total % 60)
+
+
+def schedule_palette(store):
+    custom = store.get("settings", {}).get("custom_schedule_colors", [])
+    seen = set()
+    palette = []
+    for name, value in SCHEDULE_COLOR_PALETTE:
+        if value.lower() not in seen:
+            palette.append((name, value))
+            seen.add(value.lower())
+    for idx, value in enumerate(custom, 1):
+        clean = str(value).strip()
+        if clean.startswith("#") and len(clean) == 7 and clean.lower() not in seen:
+            palette.append((f"Personal {idx}", clean))
+            seen.add(clean.lower())
+    return palette
+
+
+def palette_preview(store):
+    chips = []
+    for name, value in schedule_palette(store):
+        chips.append(
+            f"<span style='display:inline-flex;align-items:center;gap:5px;margin:0 8px 6px 0;font-size:.74rem;color:#475467'>"
+            f"<span style='height:13px;width:13px;border-radius:4px;background:{value};border:1px solid rgba(0,0,0,.08)'></span>{name}</span>"
+        )
+    st.markdown("".join(chips), unsafe_allow_html=True)
+
+
+def selected_color_preview(value, caption="Seleccionado"):
+    color = value or COURSE_PALETTE[0]
+    st.markdown(
+        f"<div style='display:flex;align-items:center;gap:8px;height:38px;margin-top:28px;'>"
+        f"<span style='height:24px;width:34px;border-radius:7px;background:{color};border:1px solid rgba(0,0,0,.1);box-shadow:inset 0 0 0 1px rgba(255,255,255,.35)'></span>"
+        f"<span style='font-size:.78rem;color:#475467'><b>{html_lib.escape(caption)}</b><br>{html_lib.escape(color)}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def color_selector(store, target_key, key, default_color=None, allow_custom=True):
+    palette = schedule_palette(store)
+    fallback = default_color or COURSE_PALETTE[0]
+    pending_key = f"{target_key}_pending"
+    if pending_key in st.session_state:
+        st.session_state[target_key] = st.session_state.pop(pending_key)
+    options = [value for _, value in palette]
+    if fallback not in options:
+        options.insert(0, fallback)
+    current = st.session_state.get(target_key, fallback)
+    if current not in options:
+        options.append(current)
+    st.session_state.setdefault(target_key, current)
+    current_index = options.index(st.session_state[target_key]) if st.session_state[target_key] in options else 0
+    swatch_col, select_col, add_col = st.columns([.12, 1, .20])
+    selected = select_col.selectbox(
+        "Color",
+        options,
+        index=current_index,
+        key=target_key,
+    )
+    swatch_col.markdown(
+        f"<div style='height:68px;display:flex;align-items:end;justify-content:center;padding-bottom:10px;'>"
+        f"<span title='{selected}' style='height:22px;width:22px;border-radius:6px;background:{selected};border:1px solid rgba(0,0,0,.16);display:inline-block;box-shadow:0 1px 2px rgba(16,24,40,.10)'></span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    if allow_custom:
+        add_col.markdown("<div style='height:27px'></div>", unsafe_allow_html=True)
+        with add_col.popover("+"):
+            custom = st.color_picker("Nuevo color", value=selected if str(selected).startswith("#") else fallback, key=f"{key}_custom")
+            if st.button("Guardar", key=f"{key}_save", use_container_width=True):
+                store.setdefault("settings", {}).setdefault("custom_schedule_colors", [])
+                if custom not in store["settings"]["custom_schedule_colors"] and custom not in COURSE_PALETTE:
+                    store["settings"]["custom_schedule_colors"].append(custom)
+                st.session_state[pending_key] = custom
+                save_store(store)
+                st.rerun()
+    else:
+        add_col.write("")
+    selected = st.session_state.get(target_key, fallback)
+    return selected
 
 
 def ensure_course(store, name):
@@ -189,6 +530,20 @@ def apply_css():
         .day-date {font-size:.78rem; color:#667085; margin-bottom:8px;}
         .schedule-card, .todo-card {border-left:5px solid #2563eb; border-radius:8px; padding:8px 9px; margin-bottom:8px; overflow:hidden;}
         .schedule-title, .todo-title {font-weight:740; color:#101828; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+        .schedule-grid {width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; border:1px solid #d0d5dd; border-radius:8px; overflow:hidden; background:#fff;}
+        .schedule-grid th {font-size:.78rem; color:#344054; background:#f8fafc; padding:7px 5px; border-bottom:1px solid #d0d5dd;}
+        .schedule-grid td {height:54px; border-bottom:1px solid #eaecf0; border-right:1px solid #eaecf0; vertical-align:top; padding:4px; overflow:hidden;}
+        .schedule-grid tr:last-child td {border-bottom:0;}
+        .schedule-grid td:last-child, .schedule-grid th:last-child {border-right:0;}
+        .schedule-time {width:82px; font-size:.72rem; color:#667085; background:#f8fafc; font-weight:700; text-align:center; vertical-align:middle !important;}
+        .schedule-block {height:44px; border-left:4px solid #2563eb; border-radius:6px; padding:4px 6px; overflow:hidden;}
+        .schedule-block-title {font-size:.76rem; font-weight:800; color:#101828; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+        .schedule-block-meta {font-size:.66rem; color:#667085; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+        .schedule-continuation {height:44px; border-left:4px solid #2563eb; border-radius:6px; opacity:.72;}
+        .schedule-manager-head {font-size:.78rem; color:#667085; font-weight:800; margin:.25rem 0 .35rem;}
+        .schedule-manager-row {border:1px solid #e4e7ec; border-radius:8px; padding:7px 9px; margin-bottom:7px; background:#fff;}
+        .schedule-manager-title {font-weight:780; font-size:.9rem; color:#101828; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+        .schedule-manager-meta {font-size:.75rem; color:#667085;}
         .subtle {font-size:.76rem; color:#667085;}
         .todo-list-day {border:1px solid #e4e7ec; background:#fff; border-radius:8px; padding:10px 12px; margin-bottom:10px;}
         .todo-row-note {font-size:.76rem; color:#667085; margin-top:-8px; margin-bottom:4px;}
@@ -233,61 +588,270 @@ def render_week(store, selected):
     start = week_start(selected)
     days = [start + timedelta(days=i) for i in range(7)]
     st.markdown('<div class="section-title">Semana: horarios fijos</div>', unsafe_allow_html=True)
-    cols = st.columns(7)
+    blocks = []
+    boundaries = set()
+    for block in store["availability"]:
+        start_time = parse_time(block.get("start_time"))
+        end_time = parse_time(block.get("end_time"))
+        if start_time and end_time and minutes(end_time) > minutes(start_time):
+            clean = dict(block)
+            clean["_start"] = minutes(start_time)
+            clean["_end"] = minutes(end_time)
+            blocks.append(clean)
+            boundaries.add(clean["_start"])
+            boundaries.add(clean["_end"])
+    if not blocks:
+        st.info("Sin horario fijo para esta semana.")
+        return
+
+    ordered = sorted(boundaries)
+    intervals = [(ordered[i], ordered[i + 1]) for i in range(len(ordered) - 1) if ordered[i + 1] > ordered[i]]
+    header = "<table class='schedule-grid'><thead><tr><th class='schedule-time'>Hora</th>"
     for idx, day in enumerate(days):
-        blocks = [b for b in store["availability"] if int(b.get("day_index", -1)) == idx]
-        blocks.sort(key=lambda b: b.get("start_time", ""))
-        html = f"<div class='week-day'><div class='day-title'>{DAYS_ES[idx]}</div><div class='day-date'>{day.strftime('%d/%m')}</div>"
-        if not blocks:
-            html += "<div class='subtle'>Sin horario fijo</div>"
-        for block in blocks:
-            color = block.get("color", "#2563eb")
-            html += (
-                f"<div class='schedule-card' style='border-left-color:{color}; background:{pastel(color)}'>"
-                f"<div class='schedule-title'>{block.get('title', 'Horario')}</div>"
-                f"<div class='subtle'>{block.get('start_time')} - {block.get('end_time')} Â· {block.get('availability_type', 'Fijo')}</div>"
-                f"</div>"
+        header += f"<th>{DAYS_ES[idx]}<br><span class='subtle'>{day.strftime('%d/%m')}</span></th>"
+    html = header + "</tr></thead><tbody>"
+
+    for start_min, end_min in intervals:
+        start_label = time_from_minutes(start_min).strftime("%H:%M")
+        end_label = time_from_minutes(end_min).strftime("%H:%M")
+        html += f"<tr><td class='schedule-time'>{start_label}<br>{end_label}</td>"
+        for day_idx in range(7):
+            block = next(
+                (
+                    item for item in blocks
+                    if int(item.get("day_index", -1)) == day_idx
+                    and int(item["_start"]) <= start_min
+                    and int(item["_end"]) >= end_min
+                ),
+                None,
             )
-        html += "</div>"
-        cols[idx].markdown(html, unsafe_allow_html=True)
+            if not block:
+                html += "<td></td>"
+                continue
+            color = block.get("color", "#2563eb")
+            bg = pastel(color)
+            if int(block["_start"]) == start_min:
+                title = html_lib.escape(str(block.get("title", "Horario")))
+                typ = html_lib.escape(str(block.get("availability_type", "Clase")))
+                time_label = f"{block.get('start_time')} - {block.get('end_time')}"
+                html += (
+                    f"<td><div class='schedule-block' style='border-left-color:{color}; background:{bg}'>"
+                    f"<div class='schedule-block-title'>{title}</div>"
+                    f"<div class='schedule-block-meta'>{time_label} · {typ}</div>"
+                    f"</div></td>"
+                )
+            else:
+                html += f"<td><div class='schedule-continuation' style='border-left-color:{color}; background:{bg}'></div></td>"
+        html += "</tr>"
+    html += "</tbody></table>"
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def manual_schedule_form(store):
     st.divider()
-    st.subheader("Agregar horario manual")
-    with st.form("manual_schedule", clear_on_submit=True):
-        c1, c2, c3, c4, c5 = st.columns([1.2, .8, .8, .8, .8])
-        title = c1.text_input("Nombre", placeholder="Clase, gimnasio, trabajo...")
-        day = c2.selectbox("Dia", DAYS_ES)
-        start = c3.time_input("Inicio", value=time(8, 0))
-        end = c4.time_input("Fin", value=time(9, 0))
-        color = c5.color_picker("Color", "#2563eb")
-        typ = st.selectbox("Tipo", ["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"])
-        if st.form_submit_button("Guardar horario", use_container_width=True):
-            store["availability"].append({
-                "availability_id": make_id("av"),
-                "title": title or typ,
-                "day_index": DAYS_ES.index(day),
-                "day_of_week": day,
-                "start_time": start.strftime("%H:%M"),
-                "end_time": end.strftime("%H:%M"),
-                "availability_type": typ,
-                "color": color,
-            })
-            add_log(store, "Student Profile Manager", "Horario fijo creado", {"title": title or typ})
-            save_store(store)
-            st.rerun()
-    if store["availability"]:
-        st.subheader("Horarios guardados")
-        for block in sorted(store["availability"], key=lambda b: (b.get("day_index", 0), b.get("start_time", ""))):
-            cols = st.columns([2, 1, 1, .7])
-            cols[0].write(f"{DAYS_ES[int(block.get('day_index', 0))]} Â· {block.get('title')}")
-            cols[1].write(f"{block.get('start_time')} - {block.get('end_time')}")
-            cols[2].write(block.get("availability_type", "Fijo"))
-            if cols[3].button("Eliminar", key=f"del_av_{block['availability_id']}"):
-                store["availability"] = [item for item in store["availability"] if item.get("availability_id") != block["availability_id"]]
+    st.subheader("Editar horario semanal")
+    st.caption("Agrega clases rapido, carga un archivo o sube una imagen de tu horario.")
+
+    with st.expander("Agregar clase rapida", expanded=True):
+        q1, q2, q3, q4 = st.columns([2.2, 1.2, 1.1, 1.1])
+        quick_title = q1.text_input("Clase o actividad", placeholder="Biologia, laboratorio, asesoria...", key="quick_schedule_title")
+        quick_day = q2.selectbox("Dia", DAYS_ES, key="quick_schedule_day")
+        quick_start = q3.time_input("Inicio", value=time(8, 0), step=300, key="quick_schedule_start")
+        quick_duration = q4.selectbox("Duracion", [30, 40, 45, 50, 60, 75, 80, 90, 120, 150, 180], index=1, format_func=lambda x: f"{x} min")
+        t1, t2 = st.columns([.78, 1.62])
+        quick_type = t1.selectbox(
+            "Tipo",
+            ["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"],
+            key="quick_schedule_type",
+        )
+        with t2:
+            quick_color = color_selector(store, "quick_schedule_color_hex", "quick_schedule", COURSE_PALETTE[len(store["availability"]) % len(COURSE_PALETTE)])
+        if st.button("Agregar al horario", use_container_width=True, key="quick_schedule_submit"):
+            start_total = minutes(quick_start)
+            end_total = start_total + int(quick_duration)
+            if not quick_title.strip():
+                st.error("Escribe el nombre de la clase o actividad.")
+            elif end_total > 23 * 60 + 59:
+                st.error("La actividad termina despues de medianoche. Ajusta la hora o duracion.")
+            else:
+                end_time = time_from_minutes(end_total)
+                store["availability"].append({
+                    "availability_id": make_id("av"),
+                    "title": quick_title.strip(),
+                    "day_index": DAYS_ES.index(quick_day),
+                    "day_of_week": quick_day,
+                    "start_time": quick_start.strftime("%H:%M"),
+                    "end_time": end_time.strftime("%H:%M"),
+                    "availability_type": quick_type,
+                    "color": quick_color,
+                })
+                add_log(store, "Student Profile Manager", "Clase agregada al horario", {"title": quick_title.strip(), "day": quick_day})
                 save_store(store)
+                st.success("Clase agregada.")
                 st.rerun()
+
+    with st.expander("Cargar horario desde archivo o imagen", expanded=False):
+        st.caption("Archivos de tabla: CSV, TXT, XLSX o XLS. Imagenes: PNG, JPG, JPEG o WEBP. Para imagen se usa la API desde .env.")
+        st.caption("Color para lo importado")
+        import_color = color_selector(store, "import_schedule_color_hex", "import_schedule", COURSE_PALETTE[len(store["availability"]) % len(COURSE_PALETTE)])
+        uploaded_schedule = st.file_uploader("Archivo de horario", type=["csv", "txt", "xlsx", "xls", "png", "jpg", "jpeg", "webp"], key="schedule_file_upload")
+        replace_schedule = st.checkbox("Reemplazar mi horario actual con el archivo", value=False, key="replace_schedule_upload")
+        if uploaded_schedule:
+            try:
+                suffix = Path(uploaded_schedule.name).suffix.lower()
+                if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+                    st.image(uploaded_schedule, caption="Horario cargado", use_container_width=True)
+                    st.caption("Primero convierto la imagen en tabla editable. Luego esa tabla se importa al horario.")
+                    if st.button("Convertir imagen en tabla", use_container_width=True):
+                        imported_rows, import_errors, table_text = read_schedule_image(uploaded_schedule, default_color=import_color)
+                        st.session_state["schedule_image_rows"] = imported_rows
+                        st.session_state["schedule_image_errors"] = import_errors
+                        st.session_state["schedule_image_table"] = table_text
+                    table_text = st.text_area(
+                        "Tabla detectada",
+                        value=st.session_state.get("schedule_image_table", ""),
+                        height=220,
+                        placeholder="| dia | inicio | fin | nombre | tipo |\n| Lunes | 07:00 | 07:40 | Matematica | Clase |",
+                        key="schedule_image_table_editor",
+                    )
+                    if st.button("Leer esta tabla", use_container_width=True):
+                        df = schedule_df_from_markdown(table_text)
+                        imported_rows, import_errors = schedule_rows_from_simple_table(df, default_color=import_color)
+                        st.session_state["schedule_image_rows"] = imported_rows
+                        st.session_state["schedule_image_errors"] = import_errors
+                        st.session_state["schedule_image_table"] = table_text
+                    imported_rows = st.session_state.get("schedule_image_rows", [])
+                    import_errors = st.session_state.get("schedule_image_errors", [])
+                    if import_errors:
+                        with st.expander("Detalles del intento de lectura", expanded=True):
+                            for error in import_errors[:6]:
+                                st.warning(error)
+                    if imported_rows:
+                        preview_rows = [{
+                            "Dia": DAYS_ES[int(row.get("day_index", 0))],
+                            "Inicio": row.get("start_time"),
+                            "Fin": row.get("end_time"),
+                            "Nombre": row.get("title"),
+                            "Tipo": row.get("availability_type"),
+                        } for row in imported_rows]
+                        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+                        if st.button("Importar bloques leidos", use_container_width=True):
+                            if replace_schedule:
+                                store["availability"] = imported_rows
+                            else:
+                                store["availability"].extend(imported_rows)
+                            add_log(store, "Student Profile Manager", "Horario importado desde imagen", {"blocks": len(imported_rows), "replace": replace_schedule})
+                            save_store(store)
+                            st.session_state.pop("schedule_image_rows", None)
+                            st.session_state.pop("schedule_image_errors", None)
+                            st.session_state.pop("schedule_image_table", None)
+                            st.success(f"Importe {len(imported_rows)} bloques desde la imagen.")
+                            st.rerun()
+                    elif st.session_state.get("schedule_image_errors") == []:
+                        st.info("La imagen se pudo procesar, pero no se detectaron bloques claros.")
+                else:
+                    preview_df = read_schedule_file(uploaded_schedule)
+                    if preview_df.empty:
+                        st.warning("No pude leer filas en este archivo.")
+                    else:
+                        st.dataframe(preview_df.head(8), use_container_width=True, hide_index=True)
+                        imported_rows, import_errors = schedule_rows_from_df(preview_df)
+                        for row in imported_rows:
+                            row["color"] = row.get("color") or import_color
+                        if import_errors:
+                            with st.expander("Filas que necesitan revision", expanded=True):
+                                for error in import_errors[:12]:
+                                    st.warning(error)
+                                if len(import_errors) > 12:
+                                    st.caption(f"Hay {len(import_errors) - 12} avisos mas.")
+                        st.caption(f"Listas para importar: {len(imported_rows)} clases/bloques.")
+                        if st.button("Importar horario", use_container_width=True, disabled=not imported_rows):
+                            if replace_schedule:
+                                store["availability"] = imported_rows
+                            else:
+                                store["availability"].extend(imported_rows)
+                            add_log(store, "Student Profile Manager", "Horario importado", {"blocks": len(imported_rows), "replace": replace_schedule})
+                            save_store(store)
+                            st.success("Horario importado.")
+                            st.rerun()
+            except Exception as exc:
+                st.error(f"No pude leer ese archivo: {exc}")
+
+    st.markdown("#### Horario agregado")
+    st.caption("Edita o elimina bloques por dia. Los colores vienen de la misma paleta para que puedas repetirlos exactamente.")
+    blocks = sorted(store["availability"], key=lambda b: (int(b.get("day_index", 0)), b.get("start_time", "")))
+    if not blocks:
+        st.info("Todavia no hay bloques de horario.")
+        return
+
+    day_tabs = st.tabs(DAYS_ES)
+    for day_idx, tab in enumerate(day_tabs):
+        with tab:
+            day_blocks = [block for block in blocks if int(block.get("day_index", -1)) == day_idx]
+            if not day_blocks:
+                st.info("Sin bloques en este dia.")
+                continue
+            st.markdown("<div class='schedule-manager-head'>Hora · Actividad · Acciones</div>", unsafe_allow_html=True)
+            for block in day_blocks:
+                block_id = block.get("availability_id") or make_id("av")
+                block["availability_id"] = block_id
+                st.markdown("<div class='schedule-manager-row'>", unsafe_allow_html=True)
+                cols = st.columns([.18, 1.05, 2.5, .72, .72])
+                cols[0].markdown(f"<div style='height:18px;width:18px;border-radius:5px;background:{block.get('color', '#2563eb')};border:1px solid rgba(0,0,0,.08)'></div>", unsafe_allow_html=True)
+                cols[1].markdown(f"<div class='schedule-manager-meta'>{block.get('start_time')} - {block.get('end_time')}</div>", unsafe_allow_html=True)
+                cols[2].markdown(
+                    f"<div class='schedule-manager-title'>{html_lib.escape(str(block.get('title', 'Horario')))}</div>"
+                    f"<div class='schedule-manager-meta'>{html_lib.escape(str(block.get('availability_type', 'Clase')))}</div>",
+                    unsafe_allow_html=True,
+                )
+                with cols[3].popover("Editar"):
+                    edit_title = st.text_input("Nombre", value=block.get("title", ""), key=f"edit_title_{block_id}")
+                    edit_day = st.selectbox(
+                        "Dia",
+                        DAYS_ES,
+                        index=max(0, min(6, int(block.get("day_index", 0)))),
+                        key=f"edit_day_{block_id}",
+                    )
+                    edit_start = st.time_input(
+                        "Inicio",
+                        value=parse_time(block.get("start_time")) or time(8, 0),
+                        step=300,
+                        key=f"edit_start_{block_id}",
+                    )
+                    edit_end = st.time_input(
+                        "Fin",
+                        value=parse_time(block.get("end_time")) or time(8, 40),
+                        step=300,
+                        key=f"edit_end_{block_id}",
+                    )
+                    edit_type = st.selectbox(
+                        "Tipo",
+                        ["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"],
+                        index=["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"].index(block.get("availability_type", "Clase")) if block.get("availability_type", "Clase") in ["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"] else 0,
+                        key=f"edit_type_{block_id}",
+                    )
+                    edit_color = color_selector(store, f"edit_color_hex_{block_id}", f"edit_schedule_{block_id}", block.get("color", "#2563eb"), allow_custom=False)
+                    if st.button("Guardar cambios", use_container_width=True, key=f"save_schedule_{block_id}"):
+                        if not edit_title.strip():
+                            st.error("Escribe el nombre.")
+                        elif minutes(edit_end) <= minutes(edit_start):
+                            st.error("La hora de fin debe ser despues del inicio.")
+                        else:
+                            block["title"] = edit_title.strip()
+                            block["day_index"] = DAYS_ES.index(edit_day)
+                            block["day_of_week"] = edit_day
+                            block["start_time"] = edit_start.strftime("%H:%M")
+                            block["end_time"] = edit_end.strftime("%H:%M")
+                            block["availability_type"] = edit_type
+                            block["color"] = edit_color
+                            add_log(store, "Student Profile Manager", "Bloque de horario editado", {"title": edit_title.strip(), "day": edit_day})
+                            save_store(store)
+                            st.rerun()
+                if cols[4].button("Eliminar", key=f"delete_schedule_{block_id}"):
+                    store["availability"] = [item for item in store["availability"] if item.get("availability_id") != block_id]
+                    save_store(store)
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
 
 
 def tab_week(store):
