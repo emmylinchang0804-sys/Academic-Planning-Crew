@@ -498,6 +498,77 @@ def course_color(store, course_id):
     return "#2563eb"
 
 
+def remember_course_color(store, name, color):
+    clean = (name or "").strip()
+    if not clean or not color:
+        return
+    course_id = ensure_course(store, clean)
+    for course in store["courses"]:
+        if course.get("course_id") == course_id:
+            course["color"] = color
+            break
+
+
+def color_for_subject(store, name, fallback="#2563eb"):
+    clean = (name or "").strip().lower()
+    if clean:
+        for course in store["courses"]:
+            if course.get("name", "").strip().lower() == clean:
+                return course.get("color", fallback)
+    for block in store.get("availability", []):
+        if block.get("title", "").strip().lower() == clean and block.get("color"):
+            return block["color"]
+    return fallback
+
+
+def schedule_conflicts(store, day_idx, start_time, end_time, exclude_id=None):
+    start_min = minutes(start_time)
+    end_min = minutes(end_time)
+    conflicts = []
+    for block in store.get("availability", []):
+        if exclude_id and block.get("availability_id") == exclude_id:
+            continue
+        if int(block.get("day_index", -1)) != int(day_idx):
+            continue
+        block_start = parse_time(block.get("start_time"))
+        block_end = parse_time(block.get("end_time"))
+        if not block_start or not block_end:
+            continue
+        if start_min < minutes(block_end) and end_min > minutes(block_start):
+            conflicts.append(block)
+    return conflicts
+
+
+def conflict_text(conflicts):
+    return ", ".join(
+        f"{item.get('title', 'Horario')} ({item.get('start_time')} - {item.get('end_time')})"
+        for item in conflicts
+    )
+
+
+def prepare_imported_schedule_rows(store, rows, replace=False):
+    clean_rows = []
+    errors = []
+    base_rows = [] if replace else store.get("availability", [])
+    temp_store = {"availability": list(base_rows)}
+    for row in rows:
+        title = row.get("title", "")
+        row["color"] = color_for_subject(store, title, row.get("color", "#2563eb"))
+        start_time = parse_time(row.get("start_time"))
+        end_time = parse_time(row.get("end_time"))
+        if not start_time or not end_time:
+            errors.append(f"{title}: hora invalida.")
+            continue
+        conflicts = schedule_conflicts(temp_store, row.get("day_index", 0), start_time, end_time)
+        if conflicts:
+            errors.append(f"{title}: choque con {conflict_text(conflicts)}.")
+            continue
+        clean_rows.append(row)
+        temp_store["availability"].append(row)
+        remember_course_color(store, title, row.get("color"))
+    return clean_rows, errors
+
+
 def pastel(hex_color):
     color = (hex_color or "#2563eb").lstrip("#")
     if len(color) != 6:
@@ -584,6 +655,57 @@ def sidebar_profile(store):
             st.rerun()
 
 
+def visual_schedule_editor(store, block_id):
+    block = next((item for item in store.get("availability", []) if item.get("availability_id") == block_id), None)
+    if not block:
+        return
+    st.markdown("#### Editar desde horario")
+    st.caption(f"{block.get('title', 'Horario')} · {block.get('start_time')} - {block.get('end_time')}")
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+        edit_title = c1.text_input("Nombre", value=block.get("title", ""), key=f"visual_title_{block_id}")
+        edit_day = c2.selectbox("Dia", DAYS_ES, index=max(0, min(6, int(block.get("day_index", 0)))), key=f"visual_day_{block_id}")
+        edit_start = c3.time_input("Inicio", value=parse_time(block.get("start_time")) or time(8, 0), step=300, key=f"visual_start_{block_id}")
+        edit_end = c4.time_input("Fin", value=parse_time(block.get("end_time")) or time(8, 40), step=300, key=f"visual_end_{block_id}")
+        t1, t2 = st.columns([.8, 1.4])
+        edit_type = t1.selectbox(
+            "Tipo",
+            ["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"],
+            index=["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"].index(block.get("availability_type", "Clase")) if block.get("availability_type", "Clase") in ["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"] else 0,
+            key=f"visual_type_{block_id}",
+        )
+        with t2:
+            edit_color = color_selector(store, f"visual_color_hex_{block_id}", f"visual_schedule_{block_id}", block.get("color", "#2563eb"), allow_custom=False)
+        a1, a2, a3 = st.columns([1, 1, 4])
+        if a1.button("Guardar", key=f"visual_save_{block_id}", use_container_width=True):
+            if not edit_title.strip():
+                st.error("Escribe el nombre.")
+            elif minutes(edit_end) <= minutes(edit_start):
+                st.error("La hora de fin debe ser despues del inicio.")
+            else:
+                conflicts = schedule_conflicts(store, DAYS_ES.index(edit_day), edit_start, edit_end, exclude_id=block_id)
+                if conflicts:
+                    st.error(f"Choque de horario con: {conflict_text(conflicts)}")
+                else:
+                    remember_course_color(store, edit_title.strip(), edit_color)
+                    block["title"] = edit_title.strip()
+                    block["day_index"] = DAYS_ES.index(edit_day)
+                    block["day_of_week"] = edit_day
+                    block["start_time"] = edit_start.strftime("%H:%M")
+                    block["end_time"] = edit_end.strftime("%H:%M")
+                    block["availability_type"] = edit_type
+                    block["color"] = edit_color
+                    add_log(store, "Student Profile Manager", "Bloque editado desde horario visual", {"title": edit_title.strip()})
+                    save_store(store)
+                    if "edit_schedule" in st.query_params:
+                        del st.query_params["edit_schedule"]
+                    st.rerun()
+        if a2.button("Cerrar", key=f"visual_close_{block_id}", use_container_width=True):
+            if "edit_schedule" in st.query_params:
+                del st.query_params["edit_schedule"]
+            st.rerun()
+
+
 def render_week(store, selected):
     start = week_start(selected)
     days = [start + timedelta(days=i) for i in range(7)]
@@ -634,17 +756,24 @@ def render_week(store, selected):
                 title = html_lib.escape(str(block.get("title", "Horario")))
                 typ = html_lib.escape(str(block.get("availability_type", "Clase")))
                 time_label = f"{block.get('start_time')} - {block.get('end_time')}"
+                block_id = html_lib.escape(str(block.get("availability_id", "")))
                 html += (
-                    f"<td><div class='schedule-block' style='border-left-color:{color}; background:{bg}'>"
+                    f"<td><a href='?edit_schedule={block_id}' target='_self' style='text-decoration:none;display:block'>"
+                    f"<div class='schedule-block' style='border-left-color:{color}; background:{bg}'>"
                     f"<div class='schedule-block-title'>{title}</div>"
                     f"<div class='schedule-block-meta'>{time_label} · {typ}</div>"
-                    f"</div></td>"
+                    f"</div></a></td>"
                 )
             else:
                 html += f"<td><div class='schedule-continuation' style='border-left-color:{color}; background:{bg}'></div></td>"
         html += "</tr>"
     html += "</tbody></table>"
     st.markdown(html, unsafe_allow_html=True)
+    edit_id = st.query_params.get("edit_schedule")
+    if isinstance(edit_id, list):
+        edit_id = edit_id[0] if edit_id else None
+    if edit_id:
+        visual_schedule_editor(store, str(edit_id))
 
 
 def manual_schedule_form(store):
@@ -664,8 +793,12 @@ def manual_schedule_form(store):
             ["Clase", "Extracurricular", "Personal", "Descanso", "Bloqueado"],
             key="quick_schedule_type",
         )
+        suggested_color = color_for_subject(store, quick_title, COURSE_PALETTE[len(store["availability"]) % len(COURSE_PALETTE)])
+        if quick_title.strip() and st.session_state.get("quick_schedule_last_title") != quick_title.strip():
+            st.session_state["quick_schedule_color_hex"] = suggested_color
+            st.session_state["quick_schedule_last_title"] = quick_title.strip()
         with t2:
-            quick_color = color_selector(store, "quick_schedule_color_hex", "quick_schedule", COURSE_PALETTE[len(store["availability"]) % len(COURSE_PALETTE)])
+            quick_color = color_selector(store, "quick_schedule_color_hex", "quick_schedule", suggested_color)
         if st.button("Agregar al horario", use_container_width=True, key="quick_schedule_submit"):
             start_total = minutes(quick_start)
             end_total = start_total + int(quick_duration)
@@ -675,20 +808,25 @@ def manual_schedule_form(store):
                 st.error("La actividad termina despues de medianoche. Ajusta la hora o duracion.")
             else:
                 end_time = time_from_minutes(end_total)
-                store["availability"].append({
-                    "availability_id": make_id("av"),
-                    "title": quick_title.strip(),
-                    "day_index": DAYS_ES.index(quick_day),
-                    "day_of_week": quick_day,
-                    "start_time": quick_start.strftime("%H:%M"),
-                    "end_time": end_time.strftime("%H:%M"),
-                    "availability_type": quick_type,
-                    "color": quick_color,
-                })
-                add_log(store, "Student Profile Manager", "Clase agregada al horario", {"title": quick_title.strip(), "day": quick_day})
-                save_store(store)
-                st.success("Clase agregada.")
-                st.rerun()
+                conflicts = schedule_conflicts(store, DAYS_ES.index(quick_day), quick_start, end_time)
+                if conflicts:
+                    st.error(f"Choque de horario con: {conflict_text(conflicts)}")
+                else:
+                    remember_course_color(store, quick_title.strip(), quick_color)
+                    store["availability"].append({
+                        "availability_id": make_id("av"),
+                        "title": quick_title.strip(),
+                        "day_index": DAYS_ES.index(quick_day),
+                        "day_of_week": quick_day,
+                        "start_time": quick_start.strftime("%H:%M"),
+                        "end_time": end_time.strftime("%H:%M"),
+                        "availability_type": quick_type,
+                        "color": quick_color,
+                    })
+                    add_log(store, "Student Profile Manager", "Clase agregada al horario", {"title": quick_title.strip(), "day": quick_day})
+                    save_store(store)
+                    st.success("Clase agregada.")
+                    st.rerun()
 
     with st.expander("Cargar horario desde archivo o imagen", expanded=False):
         st.caption("Archivos de tabla: CSV, TXT, XLSX o XLS. Imagenes: PNG, JPG, JPEG o WEBP. Para imagen se usa la API desde .env.")
@@ -736,16 +874,19 @@ def manual_schedule_form(store):
                         } for row in imported_rows]
                         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
                         if st.button("Importar bloques leidos", use_container_width=True):
+                            clean_rows, conflict_errors = prepare_imported_schedule_rows(store, imported_rows, replace_schedule)
+                            for error in conflict_errors[:8]:
+                                st.warning(error)
                             if replace_schedule:
-                                store["availability"] = imported_rows
+                                store["availability"] = clean_rows
                             else:
-                                store["availability"].extend(imported_rows)
-                            add_log(store, "Student Profile Manager", "Horario importado desde imagen", {"blocks": len(imported_rows), "replace": replace_schedule})
+                                store["availability"].extend(clean_rows)
+                            add_log(store, "Student Profile Manager", "Horario importado desde imagen", {"blocks": len(clean_rows), "replace": replace_schedule})
                             save_store(store)
                             st.session_state.pop("schedule_image_rows", None)
                             st.session_state.pop("schedule_image_errors", None)
                             st.session_state.pop("schedule_image_table", None)
-                            st.success(f"Importe {len(imported_rows)} bloques desde la imagen.")
+                            st.success(f"Importe {len(clean_rows)} bloques desde la imagen.")
                             st.rerun()
                     elif st.session_state.get("schedule_image_errors") == []:
                         st.info("La imagen se pudo procesar, pero no se detectaron bloques claros.")
@@ -766,11 +907,14 @@ def manual_schedule_form(store):
                                     st.caption(f"Hay {len(import_errors) - 12} avisos mas.")
                         st.caption(f"Listas para importar: {len(imported_rows)} clases/bloques.")
                         if st.button("Importar horario", use_container_width=True, disabled=not imported_rows):
+                            clean_rows, conflict_errors = prepare_imported_schedule_rows(store, imported_rows, replace_schedule)
+                            for error in conflict_errors[:8]:
+                                st.warning(error)
                             if replace_schedule:
-                                store["availability"] = imported_rows
+                                store["availability"] = clean_rows
                             else:
-                                store["availability"].extend(imported_rows)
-                            add_log(store, "Student Profile Manager", "Horario importado", {"blocks": len(imported_rows), "replace": replace_schedule})
+                                store["availability"].extend(clean_rows)
+                            add_log(store, "Student Profile Manager", "Horario importado", {"blocks": len(clean_rows), "replace": replace_schedule})
                             save_store(store)
                             st.success("Horario importado.")
                             st.rerun()
@@ -837,16 +981,21 @@ def manual_schedule_form(store):
                         elif minutes(edit_end) <= minutes(edit_start):
                             st.error("La hora de fin debe ser despues del inicio.")
                         else:
-                            block["title"] = edit_title.strip()
-                            block["day_index"] = DAYS_ES.index(edit_day)
-                            block["day_of_week"] = edit_day
-                            block["start_time"] = edit_start.strftime("%H:%M")
-                            block["end_time"] = edit_end.strftime("%H:%M")
-                            block["availability_type"] = edit_type
-                            block["color"] = edit_color
-                            add_log(store, "Student Profile Manager", "Bloque de horario editado", {"title": edit_title.strip(), "day": edit_day})
-                            save_store(store)
-                            st.rerun()
+                            conflicts = schedule_conflicts(store, DAYS_ES.index(edit_day), edit_start, edit_end, exclude_id=block_id)
+                            if conflicts:
+                                st.error(f"Choque de horario con: {conflict_text(conflicts)}")
+                            else:
+                                remember_course_color(store, edit_title.strip(), edit_color)
+                                block["title"] = edit_title.strip()
+                                block["day_index"] = DAYS_ES.index(edit_day)
+                                block["day_of_week"] = edit_day
+                                block["start_time"] = edit_start.strftime("%H:%M")
+                                block["end_time"] = edit_end.strftime("%H:%M")
+                                block["availability_type"] = edit_type
+                                block["color"] = edit_color
+                                add_log(store, "Student Profile Manager", "Bloque de horario editado", {"title": edit_title.strip(), "day": edit_day})
+                                save_store(store)
+                                st.rerun()
                 if cols[4].button("Eliminar", key=f"delete_schedule_{block_id}"):
                     store["availability"] = [item for item in store["availability"] if item.get("availability_id") != block_id]
                     save_store(store)
@@ -861,6 +1010,82 @@ def tab_week(store):
     st.caption(f"Semana del {start.strftime('%d/%m')} al {end.strftime('%d/%m')}")
     render_week(store, selected)
     manual_schedule_form(store)
+
+
+def tab_today(store):
+    today = date.today()
+    day_idx = today.weekday()
+    st.markdown('<div class="section-title">Hoy</div>', unsafe_allow_html=True)
+    st.caption(f"{DAYS_ES[day_idx]} {today.strftime('%d/%m/%Y')}")
+
+    today_classes = sorted(
+        [item for item in store.get("availability", []) if int(item.get("day_index", -1)) == day_idx],
+        key=lambda item: item.get("start_time", ""),
+    )
+    today_todos = todos_for_day(store, today)
+    overdue = sorted(
+        [item for item in store.get("todo_items", []) if not item.get("done") and item.get("date", "") < today.isoformat()],
+        key=lambda item: item.get("date", ""),
+    )
+    upcoming_events = []
+    for event in store.get("events", []):
+        event_date = parse_date(event.get("date"))
+        if event_date and today <= event_date <= today + timedelta(days=14):
+            upcoming_events.append(event)
+    upcoming_events.sort(key=lambda item: item.get("date", ""))
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Clases hoy", len(today_classes))
+    m2.metric("Pendientes hoy", len([item for item in today_todos if not item.get("done")]))
+    m3.metric("Vencidas", len(overdue))
+    m4.metric("Eventos próximos", len(upcoming_events))
+
+    c1, c2 = st.columns([1.1, 1])
+    with c1:
+        st.subheader("Clases de hoy")
+        if not today_classes:
+            st.info("No hay clases fijas hoy.")
+        for block in today_classes:
+            color = block.get("color", "#2563eb")
+            st.markdown(
+                f"<div class='schedule-card' style='border-left-color:{color};background:{pastel(color)}'>"
+                f"<div class='schedule-title'>{html_lib.escape(str(block.get('title', 'Horario')))}</div>"
+                f"<div class='subtle'>{block.get('start_time')} - {block.get('end_time')} · {block.get('availability_type', 'Clase')}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+    with c2:
+        st.subheader("Pendientes de hoy")
+        if not today_todos:
+            st.info("Sin pendientes para hoy.")
+        for item in today_todos:
+            checked = st.checkbox(
+                item.get("title", "Pendiente"),
+                value=bool(item.get("done")),
+                key=f"today_done_{item.get('todo_id')}",
+            )
+            if checked != bool(item.get("done")):
+                item["done"] = checked
+                save_store(store)
+                st.rerun()
+
+    c3, c4 = st.columns([1, 1])
+    with c3:
+        st.subheader("Próximos eventos")
+        if not upcoming_events:
+            st.caption("Sin eventos en los próximos 14 días.")
+        for event in upcoming_events[:8]:
+            st.write(f"{event.get('icon', chr(0x1F4CC))} {event.get('date')} · {event.get('title', '')}")
+    with c4:
+        st.subheader("Alertas")
+        if not overdue:
+            st.caption("No tienes pendientes vencidos.")
+        for item in overdue[:8]:
+            st.markdown(
+                f"<div style='color:#b42318;font-weight:700;font-size:.88rem'>{html_lib.escape(str(item.get('title', 'Pendiente')))}</div>"
+                f"<div class='subtle'>Venció: {item.get('date', '')}</div>",
+                unsafe_allow_html=True,
+            )
 
 
 def tab_month(store):
@@ -1051,6 +1276,37 @@ def tab_todo(store):
             st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
+
+def save_agent_plan(store, result):
+    activity = result["activity"]
+    course_id = ensure_course(store, activity.get("course", "General"))
+    activity["course_id"] = course_id
+    activity["activity_id"] = make_id("act")
+    store["activities"].append(activity)
+    color = course_color(store, course_id)
+    for item in result.get("todo_items", []):
+        item["todo_id"] = make_id("todo")
+        item["activity_id"] = activity["activity_id"]
+        item["course"] = course_name(store, course_id)
+        item["color"] = color
+        item.setdefault("done", False)
+        item.setdefault("order", len(store["todo_items"]))
+        store["todo_items"].append(item)
+    if activity.get("deadline"):
+        store["events"].append({
+            "event_id": make_id("event"),
+            "title": activity.get("title", "Entrega"),
+            "date": activity["deadline"],
+            "icon": chr(0x1F4CC),
+            "type": "Entrega",
+            "color": color,
+        })
+    response = result.get("summary", f"Actividad dividida en {len(result.get('todo_items', []))} pendientes.")
+    store["chat"].append({"role": "assistant", "content": response, "time": now_iso()})
+    add_log(store, "Academic Planning Crew", "Plan confirmado y guardado", {"items": len(result.get("todo_items", []))})
+    save_store(store)
+
+
 def tab_chat(store):
     st.markdown('<div class="section-title">Chat / agentes</div>', unsafe_allow_html=True)
     st.caption("Describe una actividad. Ejemplo: Tengo que leer 500 paginas para el proximo viernes.")
@@ -1063,6 +1319,31 @@ def tab_chat(store):
     for msg in store["chat"][-8:]:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
+    pending = st.session_state.get("pending_agent_plan")
+    if pending:
+        activity = pending.get("activity", {})
+        with st.container(border=True):
+            st.subheader("Propuesta del agente")
+            st.write(f"**Actividad:** {activity.get('title', 'Actividad')}")
+            st.write(f"**Tipo:** {activity.get('activity_type', '')} · **Entrega:** {activity.get('deadline', '')} · **Prioridad:** {activity.get('priority', '')}")
+            todo_preview = pending.get("todo_items", [])
+            if todo_preview:
+                st.dataframe(
+                    pd.DataFrame([{"fecha": item.get("date"), "pendiente": item.get("title")} for item in todo_preview]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            p1, p2 = st.columns([1, 1])
+            if p1.button("Confirmar y guardar", use_container_width=True):
+                save_agent_plan(store, pending)
+                st.session_state.pop("pending_agent_plan", None)
+                st.success("Plan guardado.")
+                st.rerun()
+            if p2.button("Descartar propuesta", use_container_width=True):
+                store["chat"].append({"role": "assistant", "content": "Propuesta descartada. Puedes pedirme otra version.", "time": now_iso()})
+                st.session_state.pop("pending_agent_plan", None)
+                save_store(store)
+                st.rerun()
     message = st.chat_input("Escribe la actividad...")
     if message:
         store["chat"].append({"role": "user", "content": message, "time": now_iso()})
@@ -1082,23 +1363,8 @@ def tab_chat(store):
             store["chat"].append({"role": "assistant", "content": response, "time": now_iso()})
             save_store(store)
             st.rerun()
-        activity = result["activity"]
-        course_id = ensure_course(store, activity.get("course", "General"))
-        activity["course_id"] = course_id
-        activity["activity_id"] = make_id("act")
-        store["activities"].append(activity)
-        color = course_color(store, course_id)
-        for item in result.get("todo_items", []):
-            item["todo_id"] = make_id("todo")
-            item["activity_id"] = activity["activity_id"]
-            item["course"] = course_name(store, course_id)
-            item["color"] = color
-            item.setdefault("done", False)
-            item.setdefault("order", len(store["todo_items"]))
-            store["todo_items"].append(item)
-        if activity.get("deadline"):
-            store["events"].append({"event_id": make_id("event"), "title": activity.get("title", "Entrega"), "date": activity["deadline"], "icon": chr(0x1F4CC), "type": "Entrega", "color": color})
-        response = result.get("summary", f"Actividad dividida en {len(result.get('todo_items', []))} pendientes.")
+        st.session_state["pending_agent_plan"] = result
+        response = "Preparé una propuesta. Revísala y confirma si quieres guardarla."
         store["chat"].append({"role": "assistant", "content": response, "time": now_iso()})
         save_store(store)
         st.rerun()
@@ -1150,18 +1416,20 @@ def main():
     top[1].metric("To-dos", stats["total"])
     top[2].metric("Completado", f"{stats['pct']}%")
     top[3].metric("Atrasados", stats["overdue"])
-    tabs = st.tabs(["Semana", "Mes", "To-do", "Chat / Agentes", "Progreso", "Memoria"])
+    tabs = st.tabs(["Hoy", "Semana", "Mes", "To-do", "Chat / Agentes", "Progreso", "Memoria"])
     with tabs[0]:
-        tab_week(store)
+        tab_today(store)
     with tabs[1]:
-        tab_month(store)
+        tab_week(store)
     with tabs[2]:
-        tab_todo(store)
+        tab_month(store)
     with tabs[3]:
-        tab_chat(store)
+        tab_todo(store)
     with tabs[4]:
-        tab_progress(store)
+        tab_chat(store)
     with tabs[5]:
+        tab_progress(store)
+    with tabs[6]:
         tab_memory(store)
     save_store(store)
 
