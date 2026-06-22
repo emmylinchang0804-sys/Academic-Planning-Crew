@@ -34,29 +34,29 @@ DAY_ALIASES = {
     "viernes": 4, "sabado": 5, "sábado": 5, "domingo": 6,
 }
 SCHEDULE_COLOR_PALETTE = [
-    ("Azul cielo", "#60a5fa"),
-    ("Azul tinta", "#2563eb"),
-    ("Menta", "#5eead4"),
-    ("Verde hoja", "#22c55e"),
-    ("Lavanda", "#a78bfa"),
-    ("Uva", "#9333ea"),
-    ("Rosa", "#f472b6"),
-    ("Fucsia", "#c11574"),
-    ("Coral", "#fb7185"),
-    ("Naranja", "#fb923c"),
-    ("Amarillo", "#facc15"),
-    ("Turquesa", "#06b6d4"),
-    ("Gris suave", "#94a3b8"),
-    ("Grafito", "#475467"),
+    ("Cielo pastel", "#93c5fd"),
+    ("Lavanda suave", "#c4b5fd"),
+    ("Lila nube", "#ddd6fe"),
+    ("Rosa algodón", "#f9a8d4"),
+    ("Durazno", "#fdba74"),
+    ("Menta clara", "#a7f3d0"),
+    ("Verde agua", "#99f6e4"),
+    ("Limón suave", "#fde68a"),
+    ("Coral pastel", "#fda4af"),
+    ("Celeste hielo", "#bae6fd"),
+    ("Malva", "#e9d5ff"),
+    ("Pistacho", "#bbf7d0"),
+    ("Perla azul", "#bfdbfe"),
+    ("Niebla violeta", "#d8b4fe"),
 ]
 COURSE_PALETTE = [color for _, color in SCHEDULE_COLOR_PALETTE]
 EVENT_TYPES = {
-    "Entrega": {"icon": chr(0x1F4CC), "color": "#2563eb", "meaning": "entrega"},
-    "Examen": {"icon": chr(0x1F4DD), "color": "#dc2626", "meaning": "examen"},
-    "Cumpleanos": {"icon": chr(0x1F382), "color": "#c11574", "meaning": "cumpleanos"},
-    "Reunion": {"icon": chr(0x1F91D), "color": "#0f766e", "meaning": "reunion"},
-    "Personal": {"icon": chr(0x2B50), "color": "#6941c6", "meaning": "personal"},
-    "Descanso": {"icon": chr(0x1F319), "color": "#667085", "meaning": "descanso"},
+    "Entrega": {"icon": chr(0x1F4CC), "color": "#a78bfa", "meaning": "entrega"},
+    "Examen": {"icon": chr(0x1F4DD), "color": "#fda4af", "meaning": "examen"},
+    "Cumpleanos": {"icon": chr(0x1F382), "color": "#f9a8d4", "meaning": "cumpleanos"},
+    "Reunion": {"icon": chr(0x1F91D), "color": "#99f6e4", "meaning": "reunion"},
+    "Personal": {"icon": chr(0x2B50), "color": "#c4b5fd", "meaning": "personal"},
+    "Descanso": {"icon": chr(0x1F319), "color": "#bfdbfe", "meaning": "descanso"},
 }
 st.set_page_config(page_title="Academic Planning Crew", page_icon="APC", layout="wide")
 
@@ -857,6 +857,83 @@ def apply_css():
         .habit-panel {border:1px solid #e4e7ec; background:#fff; border-radius:12px; padding:12px 14px; margin:10px 0; box-shadow:0 8px 20px rgba(16,24,40,.04);}
         .habit-row-card {border:1px solid #eef2f6; background:#fcfcfd; border-radius:12px; padding:10px 12px; margin:7px 0;}
         .habit-name {font-weight:820; color:#101828; overflow-wrap:anywhere;}
+        body {
+            background:
+                radial-gradient(circle at 9% 12%, rgba(196,181,253,.28) 0 2px, transparent 3px),
+                radial-gradient(circle at 82% 18%, rgba(217,70,239,.18) 0 1.5px, transparent 3px),
+                radial-gradient(circle at 72% 78%, rgba(167,139,250,.22) 0 2px, transparent 4px),
+                linear-gradient(180deg,#fbfaff 0%,#f8f5ff 42%,#ffffff 100%);
+        }
+        .main .block-container {
+            background:rgba(255,255,255,.78);
+            border:1px solid rgba(196,181,253,.32);
+            border-radius:18px;
+            box-shadow:0 18px 48px rgba(88,28,135,.07);
+            margin-top:10px;
+        }
+        .app-title {
+            color:#4c1d95;
+            letter-spacing:.01em;
+        }
+        .app-title::after {
+            content:" ✦";
+            color:#a855f7;
+        }
+        .app-subtitle {
+            color:#6d5f85;
+        }
+        .section-title {
+            color:#4c1d95;
+        }
+        .section-title::before {
+            content:"✦ ";
+            color:#c084fc;
+        }
+        div[data-testid="stMetric"], .dashboard-card, .today-hero, .todo-card-clean, .agenda-day, .month-cell, .habit-stat-card, .habit-panel {
+            border-color:#ddd6fe !important;
+            box-shadow:0 10px 28px rgba(88,28,135,.055) !important;
+        }
+        .today-hero {
+            background:
+                radial-gradient(circle at 92% 18%, rgba(216,180,254,.42) 0 2px, transparent 4px),
+                linear-gradient(135deg,#ffffff 0%,#faf5ff 58%,#f0f9ff 100%) !important;
+        }
+        .day-plan {
+            border-color:#ddd6fe !important;
+            background:#fdfbff !important;
+        }
+        .plan-chip {
+            background:#8b5cf6 !important;
+        }
+        .smart-list-card, .month-detail, .month-detail-row {
+            border-color:#e9d5ff !important;
+        }
+        button[kind="primary"], div[data-testid="stButton"] button {
+            border-radius:10px;
+        }
+        div[data-testid="stTabs"] button[aria-selected="true"] {
+            color:#6d28d9;
+        }
+        .chat-hero {
+            border:1px solid #ddd6fe;
+            border-radius:14px;
+            padding:16px 18px;
+            margin:8px 0 14px;
+            background:
+                radial-gradient(circle at 8% 18%, rgba(192,132,252,.36) 0 2px, transparent 4px),
+                radial-gradient(circle at 88% 22%, rgba(244,114,182,.22) 0 1.5px, transparent 4px),
+                linear-gradient(135deg,#ffffff 0%,#faf5ff 58%,#f5f3ff 100%);
+            box-shadow:0 12px 34px rgba(88,28,135,.08);
+        }
+        .chat-hero-title {font-size:1.18rem; font-weight:900; color:#4c1d95;}
+        .chat-hero-note {font-size:.86rem; color:#6b5f7d; margin-top:3px;}
+        .chat-empty {
+            border:1px dashed #c4b5fd;
+            border-radius:12px;
+            background:#fdfbff;
+            padding:14px;
+            color:#6b5f7d;
+        }
         .habit-meta {font-size:.75rem; color:#667085; margin-top:2px;}
         .habit-chip {display:inline-block; border-radius:999px; padding:2px 8px; color:#344054; background:#eef2f6; font-size:.72rem; font-weight:750; margin-top:5px;}
         .habit-day-head {text-align:center; color:#667085; font-weight:800; font-size:.76rem; padding-top:4px;}
@@ -866,6 +943,108 @@ def apply_css():
         .habit-calendar-cell.empty {background:#f8fafc; color:#98a2b3;}
         .habit-calendar-day {font-weight:850; color:#101828; font-size:.88rem;}
         .habit-calendar-note {font-size:.7rem; color:#667085; margin-top:4px; line-height:.9rem;}
+
+        /* Pastel star polish */
+        .stApp {
+            background:
+                radial-gradient(circle at 12% 8%, rgba(216,180,254,.45) 0 2px, transparent 3px),
+                radial-gradient(circle at 28% 18%, rgba(249,168,212,.34) 0 1.5px, transparent 3px),
+                radial-gradient(circle at 76% 10%, rgba(147,197,253,.38) 0 2px, transparent 4px),
+                radial-gradient(circle at 88% 74%, rgba(167,243,208,.36) 0 2px, transparent 4px),
+                linear-gradient(180deg,#fffaff 0%,#f8f3ff 44%,#f7fbff 100%) !important;
+        }
+        .main .block-container {
+            background:
+                radial-gradient(circle at 98% 2%, rgba(233,213,255,.42) 0 90px, transparent 92px),
+                rgba(255,255,255,.82) !important;
+            border:1px solid rgba(196,181,253,.48) !important;
+            border-radius:22px !important;
+        }
+        .app-title {
+            color:#4c1d95 !important;
+            text-shadow:0 2px 14px rgba(168,85,247,.18);
+        }
+        .app-title::after {content:" \\2726 \\2727"; color:#c084fc;}
+        .section-title {color:#5b21b6 !important;}
+        .section-title::before {content:"\\2726  "; color:#f0abfc;}
+        .section-title::after {content:"  \\2737"; color:#bae6fd;}
+        div[data-testid="stMetric"] {
+            background:linear-gradient(135deg,#ffffff 0%,#fdf4ff 100%) !important;
+            border-color:#e9d5ff !important;
+            border-top:4px solid #c4b5fd !important;
+        }
+        div[data-testid="stMetric"]:nth-of-type(2n) {border-top-color:#f9a8d4 !important;}
+        div[data-testid="stMetric"]:nth-of-type(3n) {border-top-color:#93c5fd !important;}
+        .today-hero, .chat-hero, .habit-hero {
+            position:relative;
+            overflow:hidden;
+            background:
+                radial-gradient(circle at 90% 18%, rgba(249,168,212,.35) 0 4px, transparent 5px),
+                radial-gradient(circle at 78% 34%, rgba(186,230,253,.45) 0 3px, transparent 4px),
+                linear-gradient(135deg,#ffffff 0%,#fdf4ff 52%,#eef6ff 100%) !important;
+            border-color:#e9d5ff !important;
+        }
+        .today-hero::after, .chat-hero::after, .habit-hero::after {
+            content:"\\2726  \\2737  \\2726";
+            position:absolute;
+            right:18px;
+            top:12px;
+            color:#c084fc;
+            font-size:1.2rem;
+            letter-spacing:.35rem;
+            opacity:.72;
+        }
+        .dashboard-card, .week-summary-card, .agenda-day, .todo-card-clean, .month-cell, .habit-stat-card, .habit-panel, .smart-list-card {
+            position:relative;
+            border-color:#e9d5ff !important;
+            background:linear-gradient(180deg,#ffffff 0%,#fffbff 100%) !important;
+            box-shadow:0 12px 28px rgba(88,28,135,.06) !important;
+        }
+        .dashboard-card::after, .todo-card-clean::after, .agenda-day::after, .month-cell::after {
+            content:"\\2726";
+            position:absolute;
+            right:10px;
+            top:7px;
+            color:#d8b4fe;
+            font-size:.82rem;
+            opacity:.78;
+            pointer-events:none;
+        }
+        .agenda-card, .schedule-block, .smart-list-card, .month-chip, .month-detail-row, .habit-row-card {
+            border-radius:12px !important;
+            box-shadow:0 6px 18px rgba(88,28,135,.045) !important;
+        }
+        .agenda-card-title::before, .schedule-block-title::before, .smart-list-title::before, .todo-section-title::before {
+            content:"\\2726 ";
+            color:#c084fc;
+            font-weight:900;
+        }
+        .plan-chip {
+            background:linear-gradient(135deg,#a78bfa,#f9a8d4) !important;
+            box-shadow:0 8px 18px rgba(168,85,247,.22);
+        }
+        .today-date-pill, .agenda-day-count, .todo-section-count, .month-legend-chip, .habit-chip {
+            background:#f5f3ff !important;
+            color:#6d28d9 !important;
+            border:1px solid #ddd6fe !important;
+        }
+        .schedule-grid {
+            border-color:#ddd6fe !important;
+            box-shadow:0 12px 28px rgba(88,28,135,.05);
+        }
+        .schedule-grid th, .schedule-time {
+            background:#faf5ff !important;
+            color:#6d28d9 !important;
+        }
+        .month-cell.today, .agenda-day.today {
+            border-color:#c084fc !important;
+            box-shadow:0 0 0 4px rgba(192,132,252,.15), 0 12px 28px rgba(88,28,135,.06) !important;
+        }
+        .chat-empty {
+            background:
+                radial-gradient(circle at 96% 20%, rgba(249,168,212,.34) 0 4px, transparent 5px),
+                #fdfbff !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -2257,13 +2436,25 @@ def save_agent_plan(store, result):
 
 def tab_chat(store):
     st.markdown('<div class="section-title">Chat / agentes</div>', unsafe_allow_html=True)
-    st.caption("Describe una actividad. Ejemplo: Tengo que leer 500 paginas para el proximo viernes.")
-    with st.expander("Memoria y analisis", expanded=False):
+    st.markdown(
+        "<div class='chat-hero'><div class='chat-hero-title'>Chat académico ✦</div>"
+        "<div class='chat-hero-note'>Describe una actividad, pide ayuda para dividir tareas o pregunta qué conviene hacer primero.</div></div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("Memoria y análisis", expanded=False):
         st.caption(f"Mensajes guardados: {len(store['chat'])}")
         st.caption(f"Actividades en memoria: {len(store['activities'])}")
         st.caption(f"Pendientes en To-do: {len(store['todo_items'])}")
+        if st.button("Limpiar historial del chat", use_container_width=True, key="clear_chat_history"):
+            store["chat"] = []
+            st.session_state.pop("pending_agent_plan", None)
+            save_store(store)
+            st.success("Historial del chat limpiado.")
+            st.rerun()
         if store["agent_log"]:
             st.dataframe(pd.DataFrame(store["agent_log"][:6]), use_container_width=True, hide_index=True)
+    if not store.get("chat"):
+        st.markdown("<div class='chat-empty'>Sin mensajes anteriores. Puedes empezar una conversación nueva.</div>", unsafe_allow_html=True)
     for msg in store["chat"][-8:]:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
@@ -2288,7 +2479,7 @@ def tab_chat(store):
                 st.success("Plan guardado.")
                 st.rerun()
             if p2.button("Descartar propuesta", use_container_width=True):
-                store["chat"].append({"role": "assistant", "content": "Propuesta descartada. Puedes pedirme otra version.", "time": now_iso()})
+                store["chat"].append({"role": "assistant", "content": "Propuesta descartada. Puedes pedirme otra versión.", "time": now_iso()})
                 st.session_state.pop("pending_agent_plan", None)
                 save_store(store)
                 st.rerun()
@@ -2307,7 +2498,7 @@ def tab_chat(store):
         for log in result.get("agent_log", []):
             add_log(store, log.get("agent", "Agent"), log.get("action", ""), log.get("payload", {}))
         if result.get("needs_clarification"):
-            response = result.get("question", "Necesito un poco mas de informacion para dividirlo bien.")
+            response = result.get("question", "Necesito un poco más de información para dividirlo bien.")
             store["chat"].append({"role": "assistant", "content": response, "time": now_iso()})
             save_store(store)
             st.rerun()
@@ -2316,7 +2507,6 @@ def tab_chat(store):
         store["chat"].append({"role": "assistant", "content": response, "time": now_iso()})
         save_store(store)
         st.rerun()
-
 
 def tab_progress(store):
     st.markdown('<div class="section-title">Progreso</div>', unsafe_allow_html=True)
