@@ -44,6 +44,30 @@ def parse_date_from_text(text, today=None):
     return None
 
 
+def workload_score(day, context):
+    weekday = day.weekday()
+    day_key = day.isoformat()
+    class_minutes = 0
+    class_count = 0
+    for block in (context or {}).get("availability", []):
+        if int(block.get("day_index", -1)) != weekday:
+            continue
+        try:
+            start_h, start_m = [int(part) for part in str(block.get("start_time", "0:0")).split(":")[:2]]
+            end_h, end_m = [int(part) for part in str(block.get("end_time", "0:0")).split(":")[:2]]
+        except ValueError:
+            continue
+        class_minutes += max(0, (end_h * 60 + end_m) - (start_h * 60 + start_m))
+        class_count += 1
+    todo_count = sum(1 for item in (context or {}).get("todo_items", []) if item.get("date") == day_key and not item.get("done"))
+    return class_minutes + class_count * 20 + todo_count * 60
+
+
+def prioritized_future_dates(today, deadline, context=None):
+    days = future_dates(today, deadline)
+    return sorted(days, key=lambda day: (workload_score(day, context or {}), day))
+
+
 def infer_type(text):
     lower = text.lower()
     if any(word in lower for word in ["examen", "parcial", "quiz"]):
@@ -145,8 +169,9 @@ def phase_plan(title, activity_type, days):
     return items
 
 
-def fallback_plan(message, today=None):
+def fallback_plan(message, today=None, context=None):
     today = today or date.today()
+    context = context or {}
     deadline = parse_date_from_text(message, today)
     activity_type = infer_type(message)
     title = clean_title(message)
@@ -156,7 +181,7 @@ def fallback_plan(message, today=None):
             "question": "¿Para que fecha necesitas tener lista esta actividad?",
             "agent_log": [{"agent": "Task Analyzer", "action": "Falta fecha limite", "payload": {"message": message}}],
         }
-    days = future_dates(today, deadline)
+    days = prioritized_future_dates(today, deadline, context)
     if not days:
         return {
             "needs_clarification": True,
@@ -213,10 +238,10 @@ def llm_plan(message, context, today):
             "context": context,
             "instructions": (
                 "Actua como Academic Planning Crew con Academic Coordinator, Task Analyzer, Academic Planner y Progress Monitor. "
-                "Devuelve JSON estricto. Si falta fecha, cantidad, paginas/capitulos o duracion necesaria, pide aclaracion. "
+                "Devuelve JSON estricto. Si falta fecha, cantidad, paginas/capitulos o duración necesaria, pide aclaracion. "
                 "No planifiques en fechas pasadas. Para lecturas divide paginas/capitulos entre dias restantes. "
-                "Para ensayos divide en tema/tesis, investigacion, bosquejo, desarrollo, conclusion y revision. "
-                "Para laboratorios divide en partes y revision."
+                "Para ensayos divide en tema/tesis, investigacion, bosquejo, desarrollo, conclusion y revisión. "
+                "Para laboratorios divide en partes y revisión."
             ),
             "schema": {
                 "needs_clarification": "bool",
@@ -243,5 +268,5 @@ def plan_activity(message, context=None, today=None):
     llm = llm_plan(message, context or {}, today)
     if llm:
         return llm
-    return fallback_plan(message, today)
+    return fallback_plan(message, today, context or {})
 

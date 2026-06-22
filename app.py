@@ -1,4 +1,5 @@
-﻿import base64
+import calendar
+import base64
 import html as html_lib
 import json
 import os
@@ -20,9 +21,10 @@ from academic_planning.workflows.planning_flow import load_dotenv, redistribute_
 
 DATA_DIR = APP_DIR / "data"
 STORE_PATH = DATA_DIR / "academic_planning_store.json"
+BACKUP_DIR = DATA_DIR / "backups"
 load_dotenv(APP_DIR)
 
-DAYS_ES = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
+DAYS_ES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 MONTHS_ES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
@@ -103,8 +105,18 @@ def save_store(store):
     STORE_PATH.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def create_backup(store, reason="manual"):
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    clean_reason = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(reason or "manual")).strip("_")[:40] or "manual"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = BACKUP_DIR / f"academic_planning_{stamp}_{clean_reason}.json"
+    backup_path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    return backup_path
+
+
 def reset_store(keep_profile=False):
     current = load_store()
+    create_backup(current, "before_reset")
     fresh = default_store()
     if keep_profile:
         fresh["student"] = current.get("student", fresh["student"])
@@ -324,7 +336,7 @@ def read_schedule_image(uploaded_file, default_color="#2563eb"):
     if not os.environ.get("OPENAI_API_KEY"):
         return [], ["Falta OPENAI_API_KEY en .env para leer horarios desde imagen."]
     prompt = (
-        "Lee esta imagen de un horario academico y conviertela primero en una tabla limpia. "
+        "Lee esta imagen de un horario academico y conviértela primero en una tabla limpia. "
         "Extrae solo clases o bloques fijos; ignora pausas, almuerzo, nombres de docentes, numeros de periodo y encabezados. "
         "Devuelve SOLO una tabla Markdown con columnas: dia | inicio | fin | nombre | tipo. "
         "Usa dias en espanol y horas en formato 24h HH:MM. Si una celda ocupa varios periodos, usa la hora inicial y final completa. "
@@ -588,6 +600,110 @@ def completion_stats(store):
     return {"total": total, "done": done, "pending": total - done, "overdue": overdue, "pct": round(done / total * 100, 1) if total else 0}
 
 
+def habit_color(index):
+    return COURSE_PALETTE[index % len(COURSE_PALETTE)]
+
+
+def habit_history(habit):
+    history = habit.setdefault("history", {})
+    if isinstance(history, list):
+        history = {str(day): True for day in history}
+        habit["history"] = history
+    today_key = date.today().isoformat()
+    if habit.get("done_today") and today_key not in history:
+        history[today_key] = True
+    return history
+
+
+def is_habit_done(habit, day):
+    return bool(habit_history(habit).get(day.isoformat(), False))
+
+
+def set_habit_done(habit, day, done):
+    history = habit_history(habit)
+    key = day.isoformat()
+    if done:
+        history[key] = True
+    else:
+        history.pop(key, None)
+    if day == date.today():
+        habit["done_today"] = done
+    habit["streak"] = habit_streak(habit)
+
+
+def habit_streak(habit, end_day=None):
+    end_day = end_day or date.today()
+    history = habit_history(habit)
+    streak = 0
+    cursor = end_day
+    while history.get(cursor.isoformat(), False):
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+def habit_week_dates(selected=None):
+    start = week_start(selected or date.today())
+    return [start + timedelta(days=i) for i in range(7)]
+
+
+def habit_week_count(habit, days):
+    return sum(1 for day in days if is_habit_done(habit, day))
+
+
+def habit_week_progress(habit, days):
+    target = max(1, int(habit.get("weekly_target", 5) or 5))
+    completed = habit_week_count(habit, days)
+    return completed, target, min(100, round(completed / target * 100))
+
+
+def habit_month_stats(store, selected_month):
+    habits = store.get("habits", [])
+    _, last_day = calendar.monthrange(selected_month.year, selected_month.month)
+    month_days = [date(selected_month.year, selected_month.month, day) for day in range(1, last_day + 1)]
+    total_slots = len(month_days) * len(habits)
+    completed_slots = sum(1 for habit in habits for day in month_days if is_habit_done(habit, day))
+    perfect_days = sum(1 for day in month_days if habits and all(is_habit_done(habit, day) for habit in habits))
+    best_streak = 0
+    for habit in habits:
+        running = 0
+        for day in month_days:
+            running = running + 1 if is_habit_done(habit, day) else 0
+            best_streak = max(best_streak, running)
+    percentage = round(completed_slots / total_slots * 100) if total_slots else 0
+    return percentage, best_streak, perfect_days
+
+
+def overdue_todos(store):
+    today_key = date.today().isoformat()
+    return [item for item in store.get("todo_items", []) if not item.get("done") and item.get("date", "") < today_key]
+
+
+def replan_overdue(store, mode):
+    items = overdue_todos(store)
+    if not items:
+        return 0
+    create_backup(store, f"before_replan_{mode}")
+    today = date.today()
+    for index, item in enumerate(items):
+        if mode == "today":
+            target = today
+        elif mode == "tomorrow":
+            target = today + timedelta(days=1)
+        else:
+            activity = next((act for act in store.get("activities", []) if act.get("activity_id") == item.get("activity_id")), None)
+            deadline = parse_date(activity.get("deadline")) if activity else None
+            if deadline and deadline >= today:
+                spread_days = [today + timedelta(days=i) for i in range((deadline - today).days + 1)]
+                target = spread_days[index % len(spread_days)]
+            else:
+                target = today + timedelta(days=1)
+        item["date"] = target.isoformat()
+        item["order"] = len(store.get("todo_items", [])) + index
+    add_log(store, "Progress Monitor", "Pendientes vencidos replanificados", {"mode": mode, "items": len(items)})
+    return len(items)
+
+
 def apply_css():
     st.markdown(
         """
@@ -628,6 +744,24 @@ def apply_css():
         .month-cell.faded {background:#f8fafc; color:#98a2b3;}
         .month-event {font-size:.74rem; line-height:1rem; border-left:4px solid #2563eb; padding:4px 5px; margin-bottom:4px; background:#f8fafc; border-radius:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
         div[data-testid="stMetric"] {background:#fff; border:1px solid #e4e7ec; padding:10px; border-radius:8px;}
+        .habit-hero {border:1px solid #e4e7ec; background:linear-gradient(135deg,#ffffff 0%,#f8fafc 100%); border-radius:12px; padding:18px 20px; margin:8px 0 14px; box-shadow:0 8px 22px rgba(16,24,40,.05);}
+        .habit-title {font-size:1.45rem; font-weight:850; color:#101828;}
+        .habit-caption {color:#667085; font-size:.92rem; margin-top:3px;}
+        .habit-stat-card {border:1px solid #e4e7ec; background:#fff; border-radius:12px; padding:14px 16px; min-height:95px; box-shadow:0 4px 14px rgba(16,24,40,.04);}
+        .habit-stat-label {font-size:.76rem; color:#667085; font-weight:800; text-transform:uppercase;}
+        .habit-stat-value {font-size:1.55rem; color:#101828; font-weight:850; line-height:1.25;}
+        .habit-panel {border:1px solid #e4e7ec; background:#fff; border-radius:12px; padding:12px 14px; margin:10px 0; box-shadow:0 8px 20px rgba(16,24,40,.04);}
+        .habit-row-card {border:1px solid #eef2f6; background:#fcfcfd; border-radius:12px; padding:10px 12px; margin:7px 0;}
+        .habit-name {font-weight:820; color:#101828; overflow-wrap:anywhere;}
+        .habit-meta {font-size:.75rem; color:#667085; margin-top:2px;}
+        .habit-chip {display:inline-block; border-radius:999px; padding:2px 8px; color:#344054; background:#eef2f6; font-size:.72rem; font-weight:750; margin-top:5px;}
+        .habit-day-head {text-align:center; color:#667085; font-weight:800; font-size:.76rem; padding-top:4px;}
+        .habit-progress-track {height:10px; background:#eef2f6; border-radius:999px; overflow:hidden; margin-top:8px;}
+        .habit-progress-fill {height:10px; border-radius:999px;}
+        .habit-calendar-cell {border:1px solid #e4e7ec; border-radius:10px; min-height:108px; background:#fff; padding:8px; margin-bottom:8px; box-shadow:0 2px 8px rgba(16,24,40,.035);}
+        .habit-calendar-cell.empty {background:#f8fafc; color:#98a2b3;}
+        .habit-calendar-day {font-weight:850; color:#101828; font-size:.88rem;}
+        .habit-calendar-note {font-size:.7rem; color:#667085; margin-top:4px; line-height:.9rem;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -681,7 +815,7 @@ def visual_schedule_editor(store, block_id):
             if not edit_title.strip():
                 st.error("Escribe el nombre.")
             elif minutes(edit_end) <= minutes(edit_start):
-                st.error("La hora de fin debe ser despues del inicio.")
+                st.error("La hora de fin debe ser después del inicio.")
             else:
                 conflicts = schedule_conflicts(store, DAYS_ES.index(edit_day), edit_start, edit_end, exclude_id=block_id)
                 if conflicts:
@@ -779,7 +913,7 @@ def render_week(store, selected):
 def manual_schedule_form(store):
     st.divider()
     st.subheader("Editar horario semanal")
-    st.caption("Agrega clases rapido, carga un archivo o sube una imagen de tu horario.")
+    st.caption("Agrega clases rápido, carga un archivo o sube una imagen de tu horario.")
 
     with st.expander("Agregar clase rapida", expanded=True):
         q1, q2, q3, q4 = st.columns([2.2, 1.2, 1.1, 1.1])
@@ -805,7 +939,7 @@ def manual_schedule_form(store):
             if not quick_title.strip():
                 st.error("Escribe el nombre de la clase o actividad.")
             elif end_total > 23 * 60 + 59:
-                st.error("La actividad termina despues de medianoche. Ajusta la hora o duracion.")
+                st.error("La actividad termina después de medianoche. Ajusta la hora o duración.")
             else:
                 end_time = time_from_minutes(end_total)
                 conflicts = schedule_conflicts(store, DAYS_ES.index(quick_day), quick_start, end_time)
@@ -829,7 +963,7 @@ def manual_schedule_form(store):
                     st.rerun()
 
     with st.expander("Cargar horario desde archivo o imagen", expanded=False):
-        st.caption("Archivos de tabla: CSV, TXT, XLSX o XLS. Imagenes: PNG, JPG, JPEG o WEBP. Para imagen se usa la API desde .env.")
+        st.caption("Archivos de tabla: CSV, TXT, XLSX o XLS. Imágenes: PNG, JPG, JPEG o WEBP. Para imagen se usa la API desde .env.")
         st.caption("Color para lo importado")
         import_color = color_selector(store, "import_schedule_color_hex", "import_schedule", COURSE_PALETTE[len(store["availability"]) % len(COURSE_PALETTE)])
         uploaded_schedule = st.file_uploader("Archivo de horario", type=["csv", "txt", "xlsx", "xls", "png", "jpg", "jpeg", "webp"], key="schedule_file_upload")
@@ -878,6 +1012,7 @@ def manual_schedule_form(store):
                             for error in conflict_errors[:8]:
                                 st.warning(error)
                             if replace_schedule:
+                                create_backup(store, "before_replace_schedule")
                                 store["availability"] = clean_rows
                             else:
                                 store["availability"].extend(clean_rows)
@@ -886,7 +1021,7 @@ def manual_schedule_form(store):
                             st.session_state.pop("schedule_image_rows", None)
                             st.session_state.pop("schedule_image_errors", None)
                             st.session_state.pop("schedule_image_table", None)
-                            st.success(f"Importe {len(clean_rows)} bloques desde la imagen.")
+                            st.success(f"Importé {len(clean_rows)} bloques desde la imagen.")
                             st.rerun()
                     elif st.session_state.get("schedule_image_errors") == []:
                         st.info("La imagen se pudo procesar, pero no se detectaron bloques claros.")
@@ -900,7 +1035,7 @@ def manual_schedule_form(store):
                         for row in imported_rows:
                             row["color"] = row.get("color") or import_color
                         if import_errors:
-                            with st.expander("Filas que necesitan revision", expanded=True):
+                            with st.expander("Filas que necesitan revisión", expanded=True):
                                 for error in import_errors[:12]:
                                     st.warning(error)
                                 if len(import_errors) > 12:
@@ -911,6 +1046,7 @@ def manual_schedule_form(store):
                             for error in conflict_errors[:8]:
                                 st.warning(error)
                             if replace_schedule:
+                                create_backup(store, "before_replace_schedule")
                                 store["availability"] = clean_rows
                             else:
                                 store["availability"].extend(clean_rows)
@@ -925,7 +1061,7 @@ def manual_schedule_form(store):
     st.caption("Edita o elimina bloques por dia. Los colores vienen de la misma paleta para que puedas repetirlos exactamente.")
     blocks = sorted(store["availability"], key=lambda b: (int(b.get("day_index", 0)), b.get("start_time", "")))
     if not blocks:
-        st.info("Todavia no hay bloques de horario.")
+        st.info("Todavía no hay bloques de horario.")
         return
 
     day_tabs = st.tabs(DAYS_ES)
@@ -979,7 +1115,7 @@ def manual_schedule_form(store):
                         if not edit_title.strip():
                             st.error("Escribe el nombre.")
                         elif minutes(edit_end) <= minutes(edit_start):
-                            st.error("La hora de fin debe ser despues del inicio.")
+                            st.error("La hora de fin debe ser después del inicio.")
                         else:
                             conflicts = schedule_conflicts(store, DAYS_ES.index(edit_day), edit_start, edit_end, exclude_id=block_id)
                             if conflicts:
@@ -1231,6 +1367,27 @@ def tab_todo(store):
             save_store(store)
             st.rerun()
 
+    overdue_items = overdue_todos(store)
+    if overdue_items:
+        with st.container(border=True):
+            st.markdown(f"**Pendientes vencidos:** {len(overdue_items)}")
+            r1, r2, r3 = st.columns(3)
+            if r1.button("Mover vencidos a hoy", use_container_width=True):
+                count = replan_overdue(store, "today")
+                save_store(store)
+                st.success(f"Moví {count} pendientes a hoy.")
+                st.rerun()
+            if r2.button("Mover vencidos a mañana", use_container_width=True):
+                count = replan_overdue(store, "tomorrow")
+                save_store(store)
+                st.success(f"Moví {count} pendientes a mañana.")
+                st.rerun()
+            if r3.button("Redistribuir hasta entrega", use_container_width=True):
+                count = replan_overdue(store, "spread")
+                save_store(store)
+                st.success(f"Redistribuí {count} pendientes.")
+                st.rerun()
+
     for idx, d in enumerate(days):
         items = todos_for_day(store, d)
         st.markdown(f"<div class='todo-list-day'><div class='day-title'>{DAYS_ES[idx]}</div><div class='day-date'>{d.strftime('%d/%m')}</div>", unsafe_allow_html=True)
@@ -1388,11 +1545,126 @@ def tab_progress(store):
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def render_habit_stats(store, days):
+    habits = store.get("habits", [])
+    today = date.today()
+    completed_today = sum(1 for habit in habits if is_habit_done(habit, today))
+    total_week = sum(max(1, int(habit.get("weekly_target", 5) or 5)) for habit in habits)
+    completed_week = sum(min(habit_week_count(habit, days), max(1, int(habit.get("weekly_target", 5) or 5))) for habit in habits)
+    weekly_progress = round(completed_week / total_week * 100) if total_week else 0
+    best_streak = max([habit_streak(habit) for habit in habits] or [0])
+    c1, c2, c3 = st.columns(3)
+    cards = [(c1, "Mejor racha", f"{best_streak} días", "Constancia activa"), (c2, "Progreso semanal", f"{weekly_progress}%", f"{completed_week}/{total_week} marcas" if total_week else "Sin hábitos"), (c3, "Completados hoy", f"{completed_today}/{len(habits)}", "Avance de hoy")]
+    for col, label, value, caption in cards:
+        col.markdown(f"""<div class="habit-stat-card"><div class="habit-stat-label">{label}</div><div class="habit-stat-value">{value}</div><div class="habit-caption">{caption}</div></div>""", unsafe_allow_html=True)
+
+
+def render_habit_form(store):
+    with st.expander("Agregar nuevo hábito", expanded=not bool(store.get("habits"))):
+        with st.form("habit_create_form", clear_on_submit=True):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            title = c1.text_input("Hábito", placeholder="Repasar vocabulario, leer 20 min...")
+            category = c2.text_input("Categoría", placeholder="Estudio")
+            target = c3.number_input("Meta semanal", 1, 7, 5)
+            if st.form_submit_button("Crear hábito", use_container_width=True) and title:
+                store["habits"].append({"habit_id": make_id("habit"), "title": title.strip(), "category": category.strip() or "Rutina", "weekly_target": int(target), "history": {}, "done_today": False, "streak": 0, "color": habit_color(len(store.get("habits", []))), "created_at": now_iso()})
+                add_log(store, "Progress Monitor", "Hábito creado", {"habit": title.strip()})
+                save_store(store)
+                st.rerun()
+
+
+def render_habit_week(store):
+    selected = st.date_input("Semana", value=date.today(), key="habit_week_pick")
+    days = habit_week_dates(selected)
+    render_habit_stats(store, days)
+    render_habit_form(store)
+    habits = store.get("habits", [])
+    if not habits:
+        st.info("Agrega tu primer hábito para empezar a construir una racha semanal.")
+        return
+    st.markdown('<div class="habit-panel">', unsafe_allow_html=True)
+    header = st.columns([2.5] + [0.72] * 7 + [1.15])
+    header[0].markdown("**Hábito**")
+    for col, day in zip(header[1:8], days):
+        col.markdown(f"<div class='habit-day-head'>{DAYS_ES[day.weekday()][:3]}<br>{day.strftime('%d/%m')}</div>", unsafe_allow_html=True)
+    header[8].markdown("**Progreso**")
+    for index, habit in enumerate(habits):
+        habit_history(habit)
+        color = habit.get("color") or habit_color(index)
+        habit["color"] = color
+        completed, target, progress = habit_week_progress(habit, days)
+        row = st.columns([2.5] + [0.72] * 7 + [1.15])
+        row[0].markdown(f"""<div class="habit-row-card" style="border-left:5px solid {color}"><div class="habit-name">{html_lib.escape(str(habit.get('title', 'Hábito')))}</div><div class="habit-meta">{html_lib.escape(str(habit.get('category', 'Rutina')))} · meta {target}/semana · racha {habit_streak(habit)} días</div><span class="habit-chip">{completed}/{target} esta semana</span></div>""", unsafe_allow_html=True)
+        for day_col, day in zip(row[1:8], days):
+            checked = day_col.checkbox(" ", value=is_habit_done(habit, day), key=f"habit_done_{habit['habit_id']}_{day.isoformat()}")
+            if checked != is_habit_done(habit, day):
+                set_habit_done(habit, day, checked)
+                add_log(store, "Progress Monitor", "Hábito actualizado", {"habit": habit.get("title"), "date": day.isoformat(), "done": checked})
+                save_store(store)
+                st.rerun()
+        row[8].markdown(f"""<div class="habit-row-card"><div class="habit-meta">{progress}%</div><div class="habit-progress-track"><div class="habit-progress-fill" style="width:{progress}%; background:{color};"></div></div></div>""", unsafe_allow_html=True)
+        with st.expander(f"Editar {habit.get('title', 'hábito')}"):
+            e1, e2, e3 = st.columns([2, 1, 1])
+            new_title = e1.text_input("Nombre", habit.get("title", ""), key=f"edit_habit_title_{habit['habit_id']}")
+            new_category = e2.text_input("Categoría", habit.get("category", "Rutina"), key=f"edit_habit_category_{habit['habit_id']}")
+            new_target = e3.number_input("Meta", 1, 7, int(habit.get("weekly_target", 5) or 5), key=f"edit_habit_target_{habit['habit_id']}")
+            a1, a2, a3 = st.columns(3)
+            if a1.button("Guardar cambios", key=f"save_habit_{habit['habit_id']}"):
+                habit["title"] = new_title.strip() or habit.get("title", "Hábito")
+                habit["category"] = new_category.strip() or "Rutina"
+                habit["weekly_target"] = int(new_target)
+                save_store(store)
+                st.rerun()
+            confirm_reset = st.checkbox("Confirmar reinicio de historial", key=f"confirm_habit_reset_{habit['habit_id']}")
+            if a2.button("Reiniciar historial", key=f"reset_habit_{habit['habit_id']}", disabled=not confirm_reset):
+                habit["history"] = {}; habit["done_today"] = False; habit["streak"] = 0
+                save_store(store); st.rerun()
+            if a3.button("Eliminar", key=f"delete_habit_{habit['habit_id']}"):
+                store["habits"] = [item for item in store["habits"] if item.get("habit_id") != habit.get("habit_id")]
+                save_store(store); st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_habit_calendar(store):
+    selected = st.date_input("Mes", value=date.today(), key="habit_month_pick")
+    selected_month = date(selected.year, selected.month, 1)
+    percentage, best_streak, perfect_days = habit_month_stats(store, selected_month)
+    c1, c2, c3 = st.columns(3); c1.metric("Progreso mensual", f"{percentage}%"); c2.metric("Mejor racha", best_streak); c3.metric("Días perfectos", perfect_days)
+    habits = store.get("habits", [])
+    _, last_day = calendar.monthrange(selected_month.year, selected_month.month)
+    cells = [None] * selected_month.weekday() + [date(selected_month.year, selected_month.month, day) for day in range(1, last_day + 1)]
+    while len(cells) % 7: cells.append(None)
+    for week_index in range(0, len(cells), 7):
+        cols = st.columns(7)
+        for col, day in zip(cols, cells[week_index:week_index + 7]):
+            if day is None:
+                col.markdown('<div class="habit-calendar-cell empty"></div>', unsafe_allow_html=True); continue
+            completed = [habit for habit in habits if is_habit_done(habit, day)]
+            ratio = round(len(completed) / len(habits) * 100) if habits else 0
+            color = "#0f766e" if ratio == 100 and habits else "#dc6803" if ratio > 0 else "#e4e7ec"
+            names = ", ".join(html_lib.escape(str(habit.get("title", "Hábito"))) for habit in completed[:3]) or "Sin marcas"
+            more = "" if len(completed) <= 3 else f" +{len(completed) - 3} más"
+            col.markdown(f"""<div class="habit-calendar-cell" style="border-top:4px solid {color}"><div class="habit-calendar-day">{day.day}</div><div class="habit-progress-track"><div class="habit-progress-fill" style="width:{ratio}%; background:{color};"></div></div><div class="habit-calendar-note">{len(completed)}/{len(habits)} completados</div><div class="habit-calendar-note">{names}{more}</div></div>""", unsafe_allow_html=True)
+    if habits:
+        with st.expander("Detalle por día"):
+            detail_day = st.date_input("Selecciona un día", value=date.today(), key="habit_detail_day")
+            completed = [habit.get("title", "Hábito") for habit in habits if is_habit_done(habit, detail_day)]
+            st.write("Completados: " + (", ".join(completed) if completed else "ninguno"))
+
+
+def tab_habits(store):
+    for habit in store.get("habits", []): habit_history(habit)
+    st.markdown("""<div class="habit-hero"><div class="habit-title">Hábitos</div><div class="habit-caption">Panel semanal con energía de Habitica y limpieza tipo Notion para cuidar tus rutinas académicas.</div></div>""", unsafe_allow_html=True)
+    week_tab, calendar_tab = st.tabs(["Semana", "Calendario"])
+    with week_tab: render_habit_week(store)
+    with calendar_tab: render_habit_calendar(store)
+
+
 def tab_memory(store):
     st.markdown('<div class="section-title">Memoria y estructura</div>', unsafe_allow_html=True)
     st.caption("La logica de agentes vive en `src/academic_planning`: crew, config, tools, memory, models y workflows.")
     with st.expander("Reiniciar todo", expanded=False):
-        st.warning("Esto borra horarios, eventos, actividades, to-dos, chat y bitacora.")
+        st.warning("Esto borra horarios, eventos, actividades, to-dos, chat y bitácora.")
         keep_profile = st.checkbox("Conservar perfil", value=True, key="memory_keep_profile")
         confirm = st.checkbox("Confirmo que quiero reiniciar la app", key="memory_confirm_reset")
         if st.button("Reiniciar memoria completa", use_container_width=True, disabled=not confirm):
@@ -1409,14 +1681,14 @@ def main():
     store = load_store()
     sidebar_profile(store)
     st.markdown('<div class="app-title">Academic Planning Crew</div>', unsafe_allow_html=True)
-    st.markdown('<div class="app-subtitle">Semana para horarios fijos, mes para eventos, To-do para ejecucion diaria y agentes para dividir actividades.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-subtitle">Semana para horarios fijos, mes para eventos, To-do para ejecución diaria y agentes para dividir actividades.</div>', unsafe_allow_html=True)
     stats = completion_stats(store)
     top = st.columns(4)
     top[0].metric("Actividades", len(store["activities"]))
     top[1].metric("To-dos", stats["total"])
     top[2].metric("Completado", f"{stats['pct']}%")
     top[3].metric("Atrasados", stats["overdue"])
-    tabs = st.tabs(["Hoy", "Semana", "Mes", "To-do", "Chat / Agentes", "Progreso", "Memoria"])
+    tabs = st.tabs(["Hoy", "Semana", "Mes", "To-do", "Chat / Agentes", "Progreso", "Hábitos", "Memoria"])
     with tabs[0]:
         tab_today(store)
     with tabs[1]:
@@ -1430,6 +1702,8 @@ def main():
     with tabs[5]:
         tab_progress(store)
     with tabs[6]:
+        tab_habits(store)
+    with tabs[7]:
         tab_memory(store)
     save_store(store)
 
