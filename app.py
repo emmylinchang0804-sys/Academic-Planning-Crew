@@ -80,7 +80,7 @@ def default_store():
         "habits": [],
         "chat": [],
         "agent_log": [],
-        "settings": {"study_start": "07:00", "study_end": "21:00"},
+        "settings": {"study_start": "07:00", "study_end": "21:00", "week_view_mode": "agenda", "show_weekends": True, "compact_schedule_cards": True, "month_view_density": "comfortable", "month_theme": "clean", "show_todos_in_month": False, "show_habits_in_month": False, "month_show_weekends": True, "event_type_colors": {}, "today_plan_mode": "balanced", "todo_view_mode": "smart"},
     }
 
 
@@ -97,7 +97,29 @@ def load_store():
     store.setdefault("todo_items", [])
     store.setdefault("settings", {})
     store["settings"].setdefault("custom_schedule_colors", [])
+    store["settings"].setdefault("week_view_mode", "agenda")
+    store["settings"].setdefault("show_weekends", True)
+    store["settings"].setdefault("compact_schedule_cards", True)
+    store["settings"].setdefault("month_view_density", "comfortable")
+    store["settings"].setdefault("month_theme", "clean")
+    store["settings"]["show_todos_in_month"] = False
+    store["settings"]["show_habits_in_month"] = False
+    store["settings"].setdefault("month_show_weekends", True)
+    store["settings"].setdefault("event_type_colors", {})
+    store["settings"].setdefault("today_plan_mode", "balanced")
+    store["settings"].setdefault("todo_view_mode", "smart")
+    for event_type, cfg in EVENT_TYPES.items():
+        store["settings"]["event_type_colors"].setdefault(event_type, cfg["color"])
+    for item in store.get("todo_items", []):
+        ensure_todo_defaults(item)
     return store
+
+
+def ensure_todo_defaults(item):
+    item.setdefault("priority", "Media")
+    item.setdefault("estimated_minutes", 30)
+    item.setdefault("energy", "Normal")
+    return item
 
 
 def save_store(store):
@@ -727,6 +749,53 @@ def apply_css():
         .schedule-block-title {font-size:.76rem; font-weight:800; color:#101828; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
         .schedule-block-meta {font-size:.66rem; color:#667085; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
         .schedule-continuation {height:44px; border-left:4px solid #2563eb; border-radius:6px; opacity:.72;}
+        .week-toolbar {border:1px solid #e4e7ec; background:#fff; border-radius:8px; padding:12px 14px; margin:8px 0 12px;}
+        .week-summary {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:8px 0 12px;}
+        .week-summary-card {border:1px solid #e4e7ec; border-radius:8px; background:#fff; padding:12px 14px;}
+        .week-summary-label {font-size:.72rem; color:#667085; font-weight:800; text-transform:uppercase;}
+        .week-summary-value {font-size:1.2rem; color:#101828; font-weight:850; margin-top:2px;}
+        .agenda-day {border:1px solid #e4e7ec; background:#fff; border-radius:8px; padding:12px; margin-bottom:12px;}
+        .agenda-day.today {border-color:#7dd3fc; box-shadow:0 0 0 3px rgba(14,165,233,.08);}
+        .agenda-day-head {display:flex; justify-content:space-between; gap:10px; align-items:flex-start; margin-bottom:10px;}
+        .agenda-day-title {font-size:1rem; font-weight:850; color:#101828;}
+        .agenda-day-date {font-size:.78rem; color:#667085; margin-top:2px;}
+        .agenda-day-count {font-size:.72rem; color:#344054; background:#f2f4f7; border-radius:999px; padding:3px 8px; font-weight:800; white-space:nowrap;}
+        .agenda-section {font-size:.72rem; color:#667085; font-weight:850; text-transform:uppercase; margin:10px 0 6px;}
+        .agenda-card {border:1px solid #eef2f6; border-left:5px solid #2563eb; border-radius:8px; padding:9px 10px; margin-bottom:8px; background:#fcfcfd;}
+        .agenda-card.compact {padding:7px 9px; margin-bottom:6px;}
+        .agenda-card-title {font-weight:820; color:#101828; overflow-wrap:anywhere;}
+        .agenda-card-meta {font-size:.75rem; color:#667085; margin-top:3px;}
+        .agenda-empty {border:1px dashed #d0d5dd; border-radius:8px; color:#667085; padding:12px; font-size:.84rem; background:#f8fafc;}
+        .today-focus {border:1px solid #bae6fd; background:#f0f9ff; border-radius:8px; padding:14px 16px; margin-bottom:12px;}
+        .today-focus-title {font-size:.78rem; color:#0369a1; text-transform:uppercase; font-weight:850;}
+        .today-focus-main {font-size:1.05rem; color:#0f172a; font-weight:850; margin-top:3px;}
+        .today-focus-note {font-size:.82rem; color:#475569; margin-top:4px;}
+        .today-hero {border:1px solid #d9e5f5; border-radius:10px; background:linear-gradient(135deg,#ffffff 0%,#f4f8ff 60%,#edf7f4 100%); padding:16px 18px; margin:10px 0 12px; box-shadow:0 10px 28px rgba(16,24,40,.05);}
+        .today-hero-top {display:flex; justify-content:space-between; gap:12px; align-items:flex-start;}
+        .today-hero-kicker {font-size:.74rem; color:#2563eb; text-transform:uppercase; font-weight:900; letter-spacing:.03em;}
+        .today-hero-title {font-size:1.22rem; color:#101828; font-weight:900; margin-top:3px; overflow-wrap:anywhere;}
+        .today-hero-note {font-size:.83rem; color:#475467; margin-top:5px; line-height:1.42;}
+        .today-date-pill {white-space:nowrap; border:1px solid #c7d7fe; background:#eef4ff; color:#1d4ed8; border-radius:999px; padding:5px 10px; font-size:.76rem; font-weight:850;}
+        .dashboard-card {border:1px solid #e5e7eb; border-radius:10px; background:#fff; padding:12px 13px; min-height:96px; box-shadow:0 5px 18px rgba(16,24,40,.035);}
+        .dashboard-label {font-size:.72rem; color:#64748b; text-transform:uppercase; font-weight:850; letter-spacing:.02em;}
+        .dashboard-value {font-size:1rem; color:#111827; font-weight:850; margin-top:5px; overflow-wrap:anywhere;}
+        .dashboard-note {font-size:.76rem; color:#667085; margin-top:5px; line-height:1.35;}
+        .day-plan {border:1px solid #dbeafe; background:#fbfdff; border-radius:10px; padding:12px 14px; margin:8px 0 14px; box-shadow:0 5px 18px rgba(16,24,40,.025);}
+        .day-plan-step {display:grid; grid-template-columns:28px 1fr; gap:10px; align-items:start; border-top:1px solid #e8eef7; padding-top:10px; margin-top:10px;}
+        .day-plan-step:first-child {border-top:0; padding-top:0; margin-top:0;}
+        .plan-chip {width:28px; height:28px; border-radius:999px; display:flex; align-items:center; justify-content:center; background:#2563eb; color:white; font-weight:850; font-size:.78rem;}
+        .plan-title {font-weight:850; color:#101828; overflow-wrap:anywhere;}
+        .plan-meta {font-size:.76rem; color:#667085;}
+        .smart-list-card {border:1px solid #e4e7ec; border-radius:8px; background:#fff; padding:10px 12px; margin-bottom:8px;}
+        .smart-list-card.done {background:#f8fafc; border-color:#edf2f7; opacity:.78;}
+        .smart-list-title {font-weight:800; color:#101828; overflow-wrap:anywhere;}
+        .smart-list-card.done .smart-list-title {text-decoration:line-through; color:#667085;}
+        .smart-list-meta {font-size:.76rem; color:#667085; margin-top:2px;}
+        @media (max-width: 900px) {
+            .week-summary {grid-template-columns:repeat(2,minmax(0,1fr));}
+            .agenda-day-head {display:block;}
+            .agenda-day-count {display:inline-block; margin-top:6px;}
+        }
         .schedule-manager-head {font-size:.78rem; color:#667085; font-weight:800; margin:.25rem 0 .35rem;}
         .schedule-manager-row {border:1px solid #e4e7ec; border-radius:8px; padding:7px 9px; margin-bottom:7px; background:#fff;}
         .schedule-manager-title {font-weight:780; font-size:.9rem; color:#101828; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
@@ -738,11 +807,46 @@ def apply_css():
         .todo-overdue div[data-testid="stDateInput"] input {color:#b42318;}
         .todo-done input {opacity:.7;}
         .todo-done [data-testid="stTextInput"] input {text-decoration:line-through; color:#98a2b3; background:#f8fafc;}
+        .todo-card-clean {border:1px solid #e4e7ec; border-radius:10px; background:#fff; padding:12px; margin-bottom:10px; box-shadow:0 4px 14px rgba(16,24,40,.025);}
+        .todo-card-clean.done {background:#f8fafc; border-color:#edf2f7; opacity:.82;}
+        .todo-card-meta {font-size:.75rem; color:#667085; margin:.15rem 0 .45rem;}
+        .todo-section-head {display:flex; justify-content:space-between; gap:10px; align-items:center; margin:14px 0 8px;}
+        .todo-section-title {font-size:1rem; font-weight:850; color:#101828;}
+        .todo-section-count {font-size:.74rem; font-weight:800; color:#667085; background:#f2f4f7; border-radius:999px; padding:3px 8px;}
         div[data-testid="stTextInput"] input {font-size:.86rem;}
         div[data-testid="stCheckbox"] label {font-size:.82rem;}
-        .month-cell {min-height:125px; border:1px solid #e4e7ec; padding:7px; background:#fff; border-radius:6px; margin-bottom:8px; overflow:hidden;}
+        .month-toolbar {border:1px solid #e4e7ec; background:#fff; border-radius:8px; padding:12px 14px; margin:8px 0 12px;}
+        .month-legend {display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px;}
+        .month-legend-chip {display:inline-flex; align-items:center; gap:6px; border:1px solid #e4e7ec; border-radius:999px; padding:4px 9px; font-size:.74rem; color:#344054; background:#fff;}
+        .month-dot {width:9px; height:9px; border-radius:999px; display:inline-block;}
+        .month-week-head {font-size:.72rem; color:#667085; font-weight:850; text-transform:uppercase; text-align:center; padding:4px 0 7px;}
+        .month-cell {min-height:150px; border:1px solid #e4e7ec; padding:9px; background:#fff; border-radius:8px; margin-bottom:10px; overflow:hidden; box-shadow:0 2px 8px rgba(16,24,40,.025);}
+        .month-cell.clean {background:#fff;}
+        .month-cell.colorful {background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);}
         .month-cell.faded {background:#f8fafc; color:#98a2b3;}
-        .month-event {font-size:.74rem; line-height:1rem; border-left:4px solid #2563eb; padding:4px 5px; margin-bottom:4px; background:#f8fafc; border-radius:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+        .month-cell.today {border-color:#38bdf8; box-shadow:0 0 0 3px rgba(14,165,233,.12);}
+        .month-cell.heavy {border-bottom:4px solid #f59e0b;}
+        .month-cell-link, .month-cell-link * {text-decoration:none !important;} .month-cell-link {color:inherit; display:block;}
+        .month-cell-top {display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:7px;}
+        .month-day-number {font-weight:850; color:#101828; font-size:.92rem;}
+        .month-day-count {font-size:.68rem; color:#475467; background:#eef2f6; border-radius:999px; padding:2px 7px; font-weight:800; white-space:nowrap;}
+        .month-load {height:6px; background:#eef2f6; border-radius:999px; overflow:hidden; margin-bottom:7px;}
+        .month-load-fill {height:6px; border-radius:999px;}
+        .month-chip {font-size:.72rem; line-height:.95rem; border-left:4px solid #2563eb; padding:4px 6px; margin-bottom:5px; background:#f8fafc; border-radius:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#101828;}
+        .month-chip.done {opacity:.58; text-decoration:line-through;}
+        .month-more {font-size:.7rem; color:#667085; font-weight:750; margin-top:2px;}
+        .month-empty {font-size:.74rem; color:#98a2b3; border:1px dashed #e4e7ec; border-radius:7px; padding:8px; background:#fcfcfd;}
+        .month-detail {border:1px solid #e4e7ec; border-radius:8px; background:#fff; padding:14px 16px; margin:10px 0 14px;}
+        .month-detail-title {font-size:1.04rem; font-weight:850; color:#101828;}
+        .month-detail-meta {font-size:.8rem; color:#667085; margin-top:2px;}
+        .month-detail-row {border:1px solid #eef2f6; border-left:5px solid #2563eb; border-radius:8px; background:#fcfcfd; padding:9px 10px; margin-bottom:8px;}
+        .month-detail-row-title {font-weight:820; color:#101828; overflow-wrap:anywhere;}
+        .month-detail-row-meta {font-size:.75rem; color:#667085; margin-top:2px;}
+        @media (max-width: 900px) {
+            .month-cell {min-height:118px; padding:7px;}
+            .month-chip {font-size:.68rem; padding:3px 5px;}
+            .month-day-count {display:none;}
+        }
         div[data-testid="stMetric"] {background:#fff; border:1px solid #e4e7ec; padding:10px; border-radius:8px;}
         .habit-hero {border:1px solid #e4e7ec; background:linear-gradient(135deg,#ffffff 0%,#f8fafc 100%); border-radius:12px; padding:18px 20px; margin:8px 0 14px; box-shadow:0 8px 22px rgba(16,24,40,.05);}
         .habit-title {font-size:1.45rem; font-weight:850; color:#101828;}
@@ -840,22 +944,142 @@ def visual_schedule_editor(store, block_id):
             st.rerun()
 
 
-def render_week(store, selected):
-    start = week_start(selected)
-    days = [start + timedelta(days=i) for i in range(7)]
-    st.markdown('<div class="section-title">Semana: horarios fijos</div>', unsafe_allow_html=True)
+def schedule_clean_blocks(store, filters=None):
+    filters = filters or {}
     blocks = []
-    boundaries = set()
-    for block in store["availability"]:
+    for block in store.get("availability", []):
         start_time = parse_time(block.get("start_time"))
         end_time = parse_time(block.get("end_time"))
-        if start_time and end_time and minutes(end_time) > minutes(start_time):
-            clean = dict(block)
-            clean["_start"] = minutes(start_time)
-            clean["_end"] = minutes(end_time)
-            blocks.append(clean)
-            boundaries.add(clean["_start"])
-            boundaries.add(clean["_end"])
+        if not start_time or not end_time or minutes(end_time) <= minutes(start_time):
+            continue
+        clean = dict(block)
+        clean["_start"] = minutes(start_time)
+        clean["_end"] = minutes(end_time)
+        if not schedule_block_matches(clean, filters):
+            continue
+        blocks.append(clean)
+    return sorted(blocks, key=lambda item: (int(item.get("day_index", 0)), int(item.get("_start", 0))))
+
+
+def schedule_block_matches(block, filters):
+    subjects = set(filters.get("subjects") or [])
+    types = set(filters.get("types") or [])
+    if subjects and str(block.get("title", "Horario")) not in subjects:
+        return False
+    if types and str(block.get("availability_type", "Clase")) not in types:
+        return False
+    return True
+
+
+def schedule_filter_options(store):
+    blocks = store.get("availability", [])
+    subjects = sorted({str(block.get("title", "")).strip() for block in blocks if str(block.get("title", "")).strip()})
+    types = sorted({str(block.get("availability_type", "Clase")).strip() or "Clase" for block in blocks})
+    return subjects, types
+
+
+def schedule_day_part(start_min):
+    if start_min < 12 * 60:
+        return "Mañana"
+    if start_min < 18 * 60:
+        return "Tarde"
+    return "Noche"
+
+
+def render_schedule_card(block, compact=True):
+    color = block.get("color", "#2563eb")
+    bg = pastel(color)
+    title = html_lib.escape(str(block.get("title", "Horario")))
+    typ = html_lib.escape(str(block.get("availability_type", "Clase")))
+    time_label = f"{block.get('start_time')} - {block.get('end_time')}"
+    block_id = html_lib.escape(str(block.get("availability_id", "")))
+    compact_class = " compact" if compact else ""
+    return (
+        f"<a href='?edit_schedule={block_id}' target='_self' style='text-decoration:none;display:block'>"
+        f"<div class='agenda-card{compact_class}' style='border-left-color:{color}; background:{bg}'>"
+        f"<div class='agenda-card-title'>{title}</div>"
+        f"<div class='agenda-card-meta'>{time_label} · {typ}</div>"
+        f"</div></a>"
+    )
+
+
+def render_week_summary(days, blocks):
+    today_key = date.today().isoformat()
+    today_classes = [block for block in blocks if int(block.get("day_index", -1)) == date.today().weekday()]
+    busy_day = "Sin clases"
+    if blocks:
+        counts = {idx: 0 for idx in range(7)}
+        for block in blocks:
+            counts[int(block.get("day_index", 0))] += 1
+        busy_idx = max(counts, key=counts.get)
+        busy_day = f"{DAYS_ES[busy_idx]} · {counts[busy_idx]} bloques" if counts[busy_idx] else "Sin clases"
+    total_minutes = sum(max(0, int(block.get("_end", 0)) - int(block.get("_start", 0))) for block in blocks)
+    visible_days = len(days)
+    cards = [
+        ("Bloques visibles", len(blocks)),
+        ("Horas de clase", f"{round(total_minutes / 60, 1)} h"),
+        ("Clases hoy", len(today_classes) if any(day.isoformat() == today_key for day in days) else "Fuera de vista"),
+        ("Día más cargado", busy_day),
+    ]
+    html = "<div class='week-summary'>"
+    for label, value in cards:
+        html += f"<div class='week-summary-card'><div class='week-summary-label'>{label}</div><div class='week-summary-value'>{value}</div></div>"
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_week_agenda(store, selected, show_weekends=True, filters=None, compact=True):
+    start = week_start(selected)
+    days = [start + timedelta(days=i) for i in range(7 if show_weekends else 5)]
+    blocks = schedule_clean_blocks(store, filters)
+    state_filter = (filters or {}).get("state", "Todos")
+    if state_filter == "Con clases":
+        days = [day for day in days if any(int(block.get("day_index", -1)) == day.weekday() for block in blocks)]
+    elif state_filter == "Sin clases":
+        days = [day for day in days if not any(int(block.get("day_index", -1)) == day.weekday() for block in blocks)]
+    st.markdown('<div class="section-title">Semana: agenda limpia</div>', unsafe_allow_html=True)
+    if not days:
+        st.info("No hay días que coincidan con los filtros.")
+        return
+    render_week_summary(days, blocks)
+    if not blocks and state_filter != "Sin clases":
+        st.info("No hay bloques de horario que coincidan con los filtros.")
+    for day in days:
+        day_idx = day.weekday()
+        day_blocks = [block for block in blocks if int(block.get("day_index", -1)) == day_idx]
+        today_class = " today" if day == date.today() else ""
+        count_label = f"{len(day_blocks)} bloque{'s' if len(day_blocks) != 1 else ''}"
+        html = (
+            f"<div class='agenda-day{today_class}'>"
+            f"<div class='agenda-day-head'><div><div class='agenda-day-title'>{DAYS_ES[day_idx]}</div>"
+            f"<div class='agenda-day-date'>{day.strftime('%d/%m/%Y')}</div></div>"
+            f"<div class='agenda-day-count'>{count_label}</div></div>"
+        )
+        if not day_blocks:
+            html += "<div class='agenda-empty'>Sin clases fijas. Buen espacio para estudiar, descansar o adelantar pendientes.</div>"
+        else:
+            current_part = None
+            for block in day_blocks:
+                part = schedule_day_part(int(block.get("_start", 0)))
+                if part != current_part:
+                    current_part = part
+                    html += f"<div class='agenda-section'>{part}</div>"
+                html += render_schedule_card(block, compact=compact)
+        html += "</div>"
+        st.markdown(html, unsafe_allow_html=True)
+    edit_id = st.query_params.get("edit_schedule")
+    if isinstance(edit_id, list):
+        edit_id = edit_id[0] if edit_id else None
+    if edit_id:
+        visual_schedule_editor(store, str(edit_id))
+
+
+def render_week_grid(store, selected, show_weekends=True, filters=None):
+    start = week_start(selected)
+    days = [start + timedelta(days=i) for i in range(7 if show_weekends else 5)]
+    st.markdown('<div class="section-title">Semana: vista compacta</div>', unsafe_allow_html=True)
+    blocks = schedule_clean_blocks(store, filters)
+    boundaries = {int(block["_start"]) for block in blocks} | {int(block["_end"]) for block in blocks}
     if not blocks:
         st.info("Sin horario fijo para esta semana.")
         return
@@ -863,15 +1087,16 @@ def render_week(store, selected):
     ordered = sorted(boundaries)
     intervals = [(ordered[i], ordered[i + 1]) for i in range(len(ordered) - 1) if ordered[i + 1] > ordered[i]]
     header = "<table class='schedule-grid'><thead><tr><th class='schedule-time'>Hora</th>"
-    for idx, day in enumerate(days):
-        header += f"<th>{DAYS_ES[idx]}<br><span class='subtle'>{day.strftime('%d/%m')}</span></th>"
+    for day in days:
+        header += f"<th>{DAYS_ES[day.weekday()]}<br><span class='subtle'>{day.strftime('%d/%m')}</span></th>"
     html = header + "</tr></thead><tbody>"
 
     for start_min, end_min in intervals:
         start_label = time_from_minutes(start_min).strftime("%H:%M")
         end_label = time_from_minutes(end_min).strftime("%H:%M")
         html += f"<tr><td class='schedule-time'>{start_label}<br>{end_label}</td>"
-        for day_idx in range(7):
+        for day in days:
+            day_idx = day.weekday()
             block = next(
                 (
                     item for item in blocks
@@ -908,6 +1133,13 @@ def render_week(store, selected):
         edit_id = edit_id[0] if edit_id else None
     if edit_id:
         visual_schedule_editor(store, str(edit_id))
+
+
+def render_week(store, selected, mode="agenda", show_weekends=True, filters=None, compact=True):
+    if mode == "grid":
+        render_week_grid(store, selected, show_weekends=show_weekends, filters=filters)
+    else:
+        render_week_agenda(store, selected, show_weekends=show_weekends, filters=filters, compact=compact)
 
 
 def manual_schedule_form(store):
@@ -1140,12 +1372,155 @@ def manual_schedule_form(store):
 
 
 def tab_week(store):
-    selected = st.date_input("Semana", value=date.today())
+    settings = store.setdefault("settings", {})
+    selected = st.date_input("Semana", value=date.today(), key="week_date")
     start = week_start(selected)
-    end = start + timedelta(days=6)
+    show_weekends = bool(settings.get("show_weekends", True))
+    end = start + timedelta(days=6 if show_weekends else 4)
     st.caption(f"Semana del {start.strftime('%d/%m')} al {end.strftime('%d/%m')}")
-    render_week(store, selected)
-    manual_schedule_form(store)
+
+    view_labels = {"agenda": "Agenda por día", "grid": "Vista compacta semanal"}
+    current_mode = settings.get("week_view_mode", "agenda")
+    current_label = view_labels.get(current_mode, "Agenda por día")
+    selected_label = st.segmented_control(
+        "Vista",
+        list(view_labels.values()),
+        default=current_label,
+        key="week_view_mode_control",
+    )
+    mode = "grid" if selected_label == "Vista compacta semanal" else "agenda"
+    c2, c3 = st.columns(2)
+    new_show_weekends = c2.toggle("Mostrar fin de semana", value=show_weekends, key="week_show_weekends")
+    compact = c3.toggle("Tarjetas compactas", value=bool(settings.get("compact_schedule_cards", True)), key="week_compact_cards")
+    if settings.get("week_view_mode") != mode or settings.get("show_weekends") != new_show_weekends or settings.get("compact_schedule_cards") != compact:
+        settings["week_view_mode"] = mode
+        settings["show_weekends"] = new_show_weekends
+        settings["compact_schedule_cards"] = compact
+        save_store(store)
+
+    subjects, types = schedule_filter_options(store)
+    with st.expander("Filtros", expanded=False):
+        f1, f2, f3 = st.columns([1.4, 1, 1])
+        selected_subjects = f1.multiselect("Materia", subjects, key="week_filter_subjects")
+        selected_types = f2.multiselect("Tipo", types, key="week_filter_types")
+        state = f3.selectbox("Estado", ["Todos", "Con clases", "Sin clases"], key="week_filter_state")
+    filters = {"subjects": selected_subjects, "types": selected_types, "state": state}
+    render_week(store, selected, mode=mode, show_weekends=new_show_weekends, filters=filters, compact=compact)
+
+    with st.expander("Administrar horario", expanded=False):
+        manual_schedule_form(store)
+
+
+def next_class_for_today(classes):
+    now_minutes = datetime.now().hour * 60 + datetime.now().minute
+    upcoming = [block for block in classes if minutes(parse_time(block.get("end_time")) or time(0, 0)) >= now_minutes]
+    return upcoming[0] if upcoming else (classes[-1] if classes else None)
+
+
+def todo_priority_rank(item):
+    return {"Alta": 0, "Media": 1, "Baja": 2}.get(item.get("priority", "Media"), 1)
+
+
+def todo_minutes(item):
+    try:
+        return max(5, int(item.get("estimated_minutes", 30) or 30))
+    except (TypeError, ValueError):
+        return 30
+
+
+def todo_meta_line(item):
+    pieces = []
+    if item.get("course"):
+        pieces.append(item.get("course"))
+    pieces.append(item.get("date", "Sin fecha"))
+    pieces.append(item.get("priority", "Media"))
+    pieces.append(f"{todo_minutes(item)} min")
+    pieces.append(item.get("energy", "Normal"))
+    return " · ".join(str(piece) for piece in pieces if piece)
+
+
+def next_upcoming_event(store, today):
+    events = []
+    for event in store.get("events", []):
+        event_date = parse_date(event.get("date"))
+        if event_date and event_date >= today:
+            events.append(event)
+    return sorted(events, key=lambda item: item.get("date", ""))[0] if events else None
+
+
+def today_progress_summary(store, today):
+    today_items = todos_for_day(store, today)
+    total = len(today_items)
+    done = sum(1 for item in today_items if item.get("done"))
+    pct = round(done / total * 100) if total else 0
+    return total, done, pct
+
+
+def dashboard_recommendation(today_classes, today_todos, overdue, upcoming_events):
+    active_today = [item for item in today_todos if not item.get("done")]
+    if overdue:
+        item = sorted(overdue, key=lambda x: (todo_priority_rank(x), x.get("date", "")))[0]
+        return ("Atiende lo vencido", item.get("title", "Pendiente vencido"), f"Prioridad {item.get('priority', 'Media')} · {todo_minutes(item)} min")
+    if active_today:
+        item = sorted(active_today, key=lambda x: (todo_priority_rank(x), todo_minutes(x)))[0]
+        return ("Haz esto primero", item.get("title", "Pendiente de hoy"), f"Prioridad {item.get('priority', 'Media')} · energía {item.get('energy', 'Normal')}")
+    next_class = next_class_for_today(today_classes)
+    if next_class:
+        return ("Prepárate para clase", next_class.get("title", "Clase"), f"{next_class.get('start_time')} - {next_class.get('end_time')}")
+    if upcoming_events:
+        event = upcoming_events[0]
+        return ("Prepara un evento", event.get("title", "Evento"), f"Fecha: {event.get('date', '')}")
+    return ("Día despejado", "Sin urgencias detectadas", "Buen momento para adelantar o descansar.")
+
+
+def build_day_plan(store, today, today_classes, today_todos, overdue, upcoming_events):
+    steps = []
+    for item in sorted(overdue, key=lambda x: (todo_priority_rank(x), x.get("date", "")))[:3]:
+        steps.append({"kind": "Vencido", "title": item.get("title", "Pendiente"), "meta": f"Venció {item.get('date', '')} · {todo_minutes(item)} min"})
+    for item in sorted([i for i in today_todos if not i.get("done")], key=lambda x: (todo_priority_rank(x), todo_minutes(x)))[:4]:
+        steps.append({"kind": "Hoy", "title": item.get("title", "Pendiente"), "meta": todo_meta_line(item)})
+    next_class = next_class_for_today(today_classes)
+    if next_class:
+        steps.append({"kind": "Clase", "title": next_class.get("title", "Clase"), "meta": f"{next_class.get('start_time')} - {next_class.get('end_time')} · {next_class.get('availability_type', 'Clase')}"})
+    for event in upcoming_events[:2]:
+        steps.append({"kind": "Evento", "title": event.get("title", "Evento"), "meta": event.get("date", "")})
+    return steps[:7]
+
+
+def render_dashboard_card(label, value, note):
+    st.markdown(
+        f"<div class='dashboard-card'><div class='dashboard-label'>{html_lib.escape(str(label))}</div>"
+        f"<div class='dashboard-value'>{html_lib.escape(str(value))}</div>"
+        f"<div class='dashboard-note'>{html_lib.escape(str(note))}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_day_plan(steps):
+    if not steps:
+        st.info("Tu día está libre de urgencias. Puedes usar este espacio para repasar o adelantar una entrega futura.")
+        return
+    html = "<div class='day-plan'>"
+    for idx, step in enumerate(steps, start=1):
+        html += (
+            f"<div class='day-plan-step'><div class='plan-chip'>{idx}</div><div>"
+            f"<div class='plan-title'>{html_lib.escape(step.get('title', ''))}</div>"
+            f"<div class='plan-meta'>{html_lib.escape(step.get('kind', ''))} · {html_lib.escape(step.get('meta', ''))}</div>"
+            f"</div></div>"
+        )
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_smart_item(title, meta, color="#2563eb", done=False):
+    done_class = " done" if done else ""
+    st.markdown(
+        f"<div class='smart-list-card{done_class}' style='border-left:5px solid {color}'>"
+        f"<div class='smart-list-title'>{html_lib.escape(str(title))}</div>"
+        f"<div class='smart-list-meta'>{html_lib.escape(str(meta))}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def tab_today(store):
@@ -1159,10 +1534,7 @@ def tab_today(store):
         key=lambda item: item.get("start_time", ""),
     )
     today_todos = todos_for_day(store, today)
-    overdue = sorted(
-        [item for item in store.get("todo_items", []) if not item.get("done") and item.get("date", "") < today.isoformat()],
-        key=lambda item: item.get("date", ""),
-    )
+    overdue = sorted(overdue_todos(store), key=lambda item: (todo_priority_rank(item), item.get("date", "")))
     upcoming_events = []
     for event in store.get("events", []):
         event_date = parse_date(event.get("date"))
@@ -1170,11 +1542,50 @@ def tab_today(store):
             upcoming_events.append(event)
     upcoming_events.sort(key=lambda item: item.get("date", ""))
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Clases hoy", len(today_classes))
-    m2.metric("Pendientes hoy", len([item for item in today_todos if not item.get("done")]))
-    m3.metric("Vencidas", len(overdue))
-    m4.metric("Eventos próximos", len(upcoming_events))
+    next_class = next_class_for_today(today_classes)
+    urgent = overdue[0] if overdue else next((item for item in today_todos if not item.get("done")), None)
+    next_event = upcoming_events[0] if upcoming_events else None
+    total_today, done_today, progress_pct = today_progress_summary(store, today)
+    rec_label, rec_title, rec_note = dashboard_recommendation(today_classes, today_todos, overdue, upcoming_events)
+
+    st.markdown(
+        f"<div class='today-hero'><div class='today-hero-top'><div>"
+        f"<div class='today-hero-kicker'>{html_lib.escape(rec_label)}</div>"
+        f"<div class='today-hero-title'>{html_lib.escape(str(rec_title))}</div>"
+        f"<div class='today-hero-note'>{html_lib.escape(str(rec_note))}</div>"
+        f"</div><div class='today-date-pill'>{DAYS_ES[day_idx]} {today.strftime('%d/%m')}</div></div></div>",
+        unsafe_allow_html=True,
+    )
+
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        render_dashboard_card("Próxima clase", next_class.get("title", "Sin clases") if next_class else "Sin clases", f"{next_class.get('start_time')} - {next_class.get('end_time')}" if next_class else "Horario despejado")
+    with d2:
+        render_dashboard_card("Pendiente urgente", urgent.get("title", "Nada urgente") if urgent else "Nada urgente", todo_meta_line(urgent) if urgent else "Sin vencidos ni tareas de hoy")
+    with d3:
+        render_dashboard_card("Próximo evento", next_event.get("title", "Sin eventos") if next_event else "Sin eventos", next_event.get("date", "Próximos 14 días limpios") if next_event else "Próximos 14 días limpios")
+    with d4:
+        render_dashboard_card("Avance del día", f"{progress_pct}%", f"{done_today}/{total_today} pendientes completados" if total_today else "Sin pendientes hoy")
+
+    st.subheader("Planear mi día")
+    render_day_plan(build_day_plan(store, today, today_classes, today_todos, overdue, upcoming_events))
+
+    with st.expander("Filtros de hoy", expanded=False):
+        status = st.radio("Estado", ["Todo", "Pendientes", "Vencidos", "Completados"], horizontal=True, key="today_status_filter")
+        subject_options = sorted({str(item.get("course", "")).strip() for item in today_todos if str(item.get("course", "")).strip()})
+        class_options = sorted({str(item.get("title", "")).strip() for item in today_classes if str(item.get("title", "")).strip()})
+        selected_subjects = st.multiselect("Materia o clase", sorted(set(subject_options + class_options)), key="today_subject_filter")
+
+    filtered_todos = list(today_todos)
+    if status == "Pendientes":
+        filtered_todos = [item for item in filtered_todos if not item.get("done")]
+    elif status == "Completados":
+        filtered_todos = [item for item in filtered_todos if item.get("done")]
+    elif status == "Vencidos":
+        filtered_todos = overdue
+    if selected_subjects:
+        filtered_todos = [item for item in filtered_todos if item.get("course") in selected_subjects or item.get("title") in selected_subjects]
+        today_classes = [item for item in today_classes if item.get("title") in selected_subjects]
 
     c1, c2 = st.columns([1.1, 1])
     with c1:
@@ -1182,28 +1593,29 @@ def tab_today(store):
         if not today_classes:
             st.info("No hay clases fijas hoy.")
         for block in today_classes:
-            color = block.get("color", "#2563eb")
-            st.markdown(
-                f"<div class='schedule-card' style='border-left-color:{color};background:{pastel(color)}'>"
-                f"<div class='schedule-title'>{html_lib.escape(str(block.get('title', 'Horario')))}</div>"
-                f"<div class='subtle'>{block.get('start_time')} - {block.get('end_time')} · {block.get('availability_type', 'Clase')}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
+            render_smart_item(
+                block.get("title", "Horario"),
+                f"{block.get('start_time')} - {block.get('end_time')} · {block.get('availability_type', 'Clase')}",
+                block.get("color", "#2563eb"),
             )
     with c2:
-        st.subheader("Pendientes de hoy")
-        if not today_todos:
-            st.info("Sin pendientes para hoy.")
-        for item in today_todos:
-            checked = st.checkbox(
-                item.get("title", "Pendiente"),
+        st.subheader("Pendientes")
+        if not filtered_todos:
+            st.info("Sin pendientes con esos filtros.")
+        for item in filtered_todos:
+            t0, t1 = st.columns([0.14, 1])
+            checked = t0.checkbox(
+                "Hecho",
                 value=bool(item.get("done")),
                 key=f"today_done_{item.get('todo_id')}",
+                label_visibility="collapsed",
             )
             if checked != bool(item.get("done")):
                 item["done"] = checked
                 save_store(store)
                 st.rerun()
+            with t1:
+                render_smart_item(item.get("title", "Pendiente"), todo_meta_line(item), item.get("color", "#2563eb"), done=bool(item.get("done")))
 
     c3, c4 = st.columns([1, 1])
     with c3:
@@ -1211,62 +1623,335 @@ def tab_today(store):
         if not upcoming_events:
             st.caption("Sin eventos en los próximos 14 días.")
         for event in upcoming_events[:8]:
-            st.write(f"{event.get('icon', chr(0x1F4CC))} {event.get('date')} · {event.get('title', '')}")
+            render_smart_item(
+                f"{event.get('icon', chr(0x1F4CC))} {event.get('title', '')}",
+                event.get("date", ""),
+                event.get("color", "#2563eb"),
+            )
     with c4:
         st.subheader("Alertas")
         if not overdue:
             st.caption("No tienes pendientes vencidos.")
         for item in overdue[:8]:
-            st.markdown(
-                f"<div style='color:#b42318;font-weight:700;font-size:.88rem'>{html_lib.escape(str(item.get('title', 'Pendiente')))}</div>"
-                f"<div class='subtle'>Venció: {item.get('date', '')}</div>",
-                unsafe_allow_html=True,
-            )
+            render_smart_item(item.get("title", "Pendiente"), f"Venció: {item.get('date', '')} · {todo_minutes(item)} min", "#b42318")
+
+def month_settings(store):
+    settings = store.setdefault("settings", {})
+    settings.setdefault("month_view_density", "comfortable")
+    settings.setdefault("month_theme", "clean")
+    settings["show_todos_in_month"] = False
+    settings["show_habits_in_month"] = False
+    settings.setdefault("month_show_weekends", True)
+    colors = settings.setdefault("event_type_colors", {})
+    for event_type, cfg in EVENT_TYPES.items():
+        colors.setdefault(event_type, cfg["color"])
+    return settings
 
 
-def tab_month(store):
-    m1, m2 = st.columns([1, .5])
-    month_name = m1.selectbox("Mes", MONTHS_ES, index=date.today().month - 1, key="month_name")
-    year = m2.number_input("Año", min_value=2020, max_value=2100, value=date.today().year, step=1, key="month_year")
-    selected = date(int(year), MONTHS_ES.index(month_name) + 1, 1)
-    st.markdown(f"<div class='section-title'>{month_name} {int(year)}</div>", unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 3])
-    with c1.popover("Agregar evento"):
-        with st.form("event_form", clear_on_submit=True):
-            title = st.text_input("Evento", placeholder="Steven, parcial, entrega...")
-            event_date = st.date_input("Fecha", value=date.today(), key="event_date")
-            event_type = st.selectbox("Icono", list(EVENT_TYPES.keys()))
-            color = st.color_picker("Color", EVENT_TYPES[event_type]["color"])
-            if st.form_submit_button("Agregar", use_container_width=True) and title:
-                icon = EVENT_TYPES[event_type]["icon"]
+def event_type_color(store, event_type, fallback="#2563eb"):
+    return month_settings(store).get("event_type_colors", {}).get(event_type, fallback)
+
+
+def month_visible_days(selected, show_weekends=True):
+    cal = __import__("calendar").Calendar(firstweekday=0)
+    weeks = []
+    for week in cal.monthdatescalendar(selected.year, selected.month):
+        weeks.append(week if show_weekends else week[:5])
+    return weeks
+
+
+def month_todos_for_day(store, day, include_done=True):
+    items = [item for item in store.get("todo_items", []) if item.get("date") == day.isoformat()]
+    if not include_done:
+        items = [item for item in items if not item.get("done")]
+    return sorted(items, key=lambda item: (bool(item.get("done")), int(item.get("order", 0))))
+
+
+def month_classes_for_day(store, day):
+    return sorted(
+        [item for item in store.get("availability", []) if int(item.get("day_index", -1)) == day.weekday()],
+        key=lambda item: item.get("start_time", ""),
+    )
+
+
+def month_habit_summary(store, day):
+    habits = store.get("habits", [])
+    if not habits:
+        return None
+    done = sum(1 for habit in habits if is_habit_done(habit, day))
+    return {"done": done, "total": len(habits)}
+
+
+def month_item_matches_filter(item, active_filter):
+    if active_filter == "Todos":
+        return True
+    if active_filter == "Entregas":
+        return item.get("kind") == "event" and item.get("type") == "Entrega"
+    if active_filter == "Exámenes":
+        return item.get("kind") == "event" and item.get("type") == "Examen"
+    if active_filter == "Personales":
+        return item.get("kind") == "event" and item.get("type") == "Personal"
+    return True
+
+
+def month_items_for_day(store, day, active_filter="Todos", show_todos=True, show_habits=False):
+    items = []
+    for event in store.get("events", []):
+        if event.get("date") == day.isoformat():
+            event_type = event.get("type", "Personal")
+            items.append({
+                "kind": "event",
+                "id": event.get("event_id", ""),
+                "title": event.get("title", "Evento"),
+                "meta": event_type,
+                "type": event_type,
+                "icon": event.get("icon", EVENT_TYPES.get(event_type, {}).get("icon", chr(0x2B50))),
+                "color": event.get("color") or event_type_color(store, event_type, "#2563eb"),
+                "raw": event,
+            })
+    return [item for item in items if month_item_matches_filter(item, active_filter)]
+
+
+def month_day_weight(store, day, items):
+    classes = month_classes_for_day(store, day)
+    class_load = min(4, round(len(classes) / 3))
+    unfinished = sum(1 for item in items if item.get("kind") == "todo" and not item.get("done"))
+    important = sum(1 for item in items if item.get("type") in {"Entrega", "Examen", "Vencido"})
+    return class_load + unfinished * 2 + important * 3
+
+
+def month_weight_color(weight):
+    if weight >= 10:
+        return "#dc2626"
+    if weight >= 6:
+        return "#f59e0b"
+    if weight >= 3:
+        return "#0ea5e9"
+    return "#98a2b3"
+
+
+def render_month_legend(store, show_todos=True, show_habits=False):
+    chips = []
+    for event_type, cfg in EVENT_TYPES.items():
+        chips.append((cfg["icon"], cfg["meaning"].title(), event_type_color(store, event_type, cfg["color"])))
+    html = "<div class='month-legend'>"
+    for icon, label, color in chips:
+        html += f"<span class='month-legend-chip'><span class='month-dot' style='background:{color}'></span>{icon} {html_lib.escape(label)}</span>"
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_month_cell(store, day, selected_month, active_filter, settings):
+    show_todos = bool(settings.get("show_todos_in_month", True))
+    show_habits = bool(settings.get("show_habits_in_month", False))
+    density = settings.get("month_view_density", "comfortable")
+    theme = settings.get("month_theme", "clean")
+    visible_limit = 4 if density == "compact" else 5
+    items = month_items_for_day(store, day, active_filter, show_todos, show_habits)
+    weight = month_day_weight(store, day, items)
+    faded = " faded" if day.month != selected_month.month else ""
+    today_class = " today" if day == date.today() else ""
+    heavy = " heavy" if weight >= 6 else ""
+    cell_class = f"month-cell {theme}{faded}{today_class}{heavy}"
+    load_width = min(100, weight * 10)
+    load_color = month_weight_color(weight)
+    href = f"?month_day={day.isoformat()}"
+    html = f"<a class='month-cell-link' href='{href}' target='_self'><div class='{cell_class}'>"
+    html += f"<div class='month-cell-top'><span class='month-day-number'>{day.day}</span></div>"
+    html += f"<div class='month-load'><div class='month-load-fill' style='width:{load_width}%; background:{load_color}'></div></div>"
+    if not items:
+        html += "<div class='month-empty'>Libre</div>"
+    else:
+        for item in items[:visible_limit]:
+            color = item.get("color", "#2563eb")
+            bg = pastel(color)
+            done = " done" if item.get("done") else ""
+            label = html_lib.escape(f"{item.get('icon', '')} {item.get('title', '')}".strip())
+            html += f"<div class='month-chip{done}' style='border-left-color:{color}; background:{bg}'>{label}</div>"
+        if len(items) > visible_limit:
+            html += f"<div class='month-more'>+{len(items) - visible_limit} más</div>"
+    html += "</div></a>"
+    return html
+
+
+def selected_month_day(default_day, selected_month):
+    raw = st.query_params.get("month_day")
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    parsed = parse_date(raw) if raw else None
+    if parsed and parsed.year == selected_month.year and parsed.month == selected_month.month:
+        return parsed
+    return default_day if default_day.month == selected_month.month else selected_month
+
+
+def save_event_from_detail(store, event, title, event_date, event_type, color):
+    event["title"] = title.strip() or event.get("title", "Evento")
+    event["date"] = event_date.isoformat()
+    event["type"] = event_type
+    event["icon"] = EVENT_TYPES.get(event_type, EVENT_TYPES["Personal"])["icon"]
+    event["color"] = color
+    save_store(store)
+
+
+def render_day_detail(store, day, active_filter, settings):
+    show_todos = bool(settings.get("show_todos_in_month", True))
+    show_habits = bool(settings.get("show_habits_in_month", False))
+    items = month_items_for_day(store, day, active_filter, show_todos, show_habits)
+    classes = month_classes_for_day(store, day)
+    day_events = [event for event in store.get("events", []) if event.get("date") == day.isoformat()]
+    weight = month_day_weight(store, day, items)
+    st.markdown(
+        f"<div class='month-detail'><div class='month-detail-title'>{DAYS_ES[day.weekday()]} {day.strftime('%d/%m/%Y')}</div>"
+        f"<div class='month-detail-meta'>{len(day_events)} eventos · {len(classes)} clases fijas · peso {weight}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.popover("Agregar evento"):
+        with st.form(f"event_quick_{day.isoformat()}", clear_on_submit=True):
+            title = st.text_input("Evento", placeholder="Parcial, entrega, reunión...")
+            event_date = st.date_input("Fecha", value=day, key=f"event_date_detail_{day.isoformat()}")
+            event_type = st.selectbox("Tipo", list(EVENT_TYPES.keys()), key=f"event_type_detail_{day.isoformat()}")
+            color = st.color_picker("Color", event_type_color(store, event_type, EVENT_TYPES[event_type]["color"]), key=f"event_color_detail_{day.isoformat()}")
+            if st.form_submit_button("Guardar evento", use_container_width=True) and title:
                 store["events"].append({
                     "event_id": make_id("event"),
-                    "title": title,
+                    "title": title.strip(),
                     "date": event_date.isoformat(),
-                    "icon": icon,
+                    "icon": EVENT_TYPES[event_type]["icon"],
                     "type": event_type,
                     "color": color,
                 })
                 save_store(store)
                 st.rerun()
-    with c2:
-        legend = "  ".join([f"{cfg['icon']} {cfg['meaning']}" for cfg in EVENT_TYPES.values()])
-        st.caption(legend)
-    cal = __import__("calendar").Calendar(firstweekday=0)
-    header = st.columns(7)
-    for i, day in enumerate(DAYS_ES):
-        header[i].markdown(f"**{day[:3]}**")
-    for week in cal.monthdatescalendar(selected.year, selected.month):
-        cols = st.columns(7)
+    if classes:
+        with st.expander("Clases fijas de este día", expanded=False):
+            for block in classes:
+                render_smart_item(block.get("title", "Clase"), f"{block.get('start_time')} - {block.get('end_time')} · {block.get('availability_type', 'Clase')}", block.get("color", "#2563eb"))
+
+    day_events = [event for event in store.get("events", []) if event.get("date") == day.isoformat()]
+    if day_events:
+        st.subheader("Eventos")
+    for event in day_events:
+        event_id = event.get("event_id", make_id("event"))
+        event["event_id"] = event_id
+        color = event.get("color") or event_type_color(store, event.get("type", "Personal"), "#2563eb")
+        st.markdown(
+            f"<div class='month-detail-row' style='border-left-color:{color}; background:{pastel(color)}'>"
+            f"<div class='month-detail-row-title'>{html_lib.escape(str(event.get('icon', '') + ' ' + event.get('title', 'Evento')))}</div>"
+            f"<div class='month-detail-row-meta'>{html_lib.escape(str(event.get('type', 'Evento')))} · {event.get('date', '')}</div></div>",
+            unsafe_allow_html=True,
+        )
+        with st.expander(f"Editar {event.get('title', 'evento')}", expanded=False):
+            e1, e2 = st.columns([1.4, 1])
+            title = e1.text_input("Título", value=event.get("title", ""), key=f"month_edit_title_{event_id}")
+            event_date = e2.date_input("Fecha", value=parse_date(event.get("date")) or day, key=f"month_edit_date_{event_id}")
+            e3, e4 = st.columns([1, 1])
+            event_type = e3.selectbox("Tipo", list(EVENT_TYPES.keys()), index=list(EVENT_TYPES.keys()).index(event.get("type", "Personal")) if event.get("type", "Personal") in EVENT_TYPES else 0, key=f"month_edit_type_{event_id}")
+            picked_color = e4.color_picker("Color", value=color, key=f"month_edit_color_{event_id}")
+            b1, b2 = st.columns([1, 1])
+            if b1.button("Guardar cambios", key=f"month_save_event_{event_id}", use_container_width=True):
+                save_event_from_detail(store, event, title, event_date, event_type, picked_color)
+                st.rerun()
+            confirm = st.checkbox("Confirmar eliminación", key=f"month_confirm_delete_{event_id}")
+            if b2.button("Eliminar", key=f"month_delete_event_{event_id}", use_container_width=True, disabled=not confirm):
+                store["events"] = [item for item in store["events"] if item.get("event_id") != event_id]
+                save_store(store)
+                st.rerun()
+
+    day_todos = month_todos_for_day(store, day)
+    if show_todos and day_todos:
+        st.subheader("Pendientes")
+        for todo in day_todos:
+            color = todo.get("color", event_type_color(store, "Pendiente", "#7c3aed"))
+            cols = st.columns([.12, 2.6, .7])
+            done = cols[0].checkbox("", value=bool(todo.get("done")), key=f"month_done_{todo.get('todo_id')}")
+            title = cols[1].text_input("Pendiente", value=todo.get("title", ""), key=f"month_todo_title_{todo.get('todo_id')}", label_visibility="collapsed")
+            new_date = cols[2].date_input("Fecha", value=parse_date(todo.get("date")) or day, key=f"month_todo_date_{todo.get('todo_id')}", label_visibility="collapsed")
+            changed = done != bool(todo.get("done")) or title != todo.get("title") or new_date.isoformat() != todo.get("date")
+            if changed:
+                todo["done"] = done
+                todo["title"] = title.strip() or todo.get("title", "Pendiente")
+                todo["date"] = new_date.isoformat()
+                save_store(store)
+                st.rerun()
+            st.markdown(f"<div class='month-detail-row-meta' style='margin-top:-8px; margin-bottom:8px; color:{color}'>{html_lib.escape(str(todo.get('course', 'General')))}</div>", unsafe_allow_html=True)
+
+    if show_habits:
+        summary = month_habit_summary(store, day)
+        if summary:
+            st.subheader("Hábitos")
+            st.caption(f"{summary['done']}/{summary['total']} completados en este día.")
+
+
+def render_month_preferences(store):
+    settings = month_settings(store)
+    with st.expander("Personalizar calendario", expanded=False):
+        p1, p2, p3 = st.columns([1, 1, 1])
+        density_label = p1.segmented_control(
+            "Densidad",
+            ["Cómoda", "Compacta"],
+            default="Compacta" if settings.get("month_view_density") == "compact" else "Cómoda",
+            key="month_density_control",
+        )
+        theme_label = p2.segmented_control(
+            "Estilo",
+            ["Limpio", "Colorido"],
+            default="Colorido" if settings.get("month_theme") == "colorful" else "Limpio",
+            key="month_theme_control",
+        )
+        show_weekends = p3.toggle("Mostrar fin de semana", value=bool(settings.get("month_show_weekends", True)), key="month_weekend_toggle")
+        new_density = "compact" if density_label == "Compacta" else "comfortable"
+        new_theme = "colorful" if theme_label == "Colorido" else "clean"
+        changed = (
+            settings.get("month_view_density") != new_density
+            or settings.get("month_theme") != new_theme
+            or settings.get("month_show_weekends") != show_weekends
+        )
+        settings["month_view_density"] = new_density
+        settings["month_theme"] = new_theme
+        settings["month_show_weekends"] = show_weekends
+        settings["show_todos_in_month"] = False
+        settings["show_habits_in_month"] = False
+
+        st.caption("Colores por tipo")
+        color_cols = st.columns(3)
+        editable_types = list(EVENT_TYPES.keys())
+        for index, event_type in enumerate(editable_types):
+            fallback = EVENT_TYPES.get(event_type, {}).get("color", {"Pendiente": "#7c3aed", "Vencido": "#b42318", "Hábito": "#0f766e"}.get(event_type, "#2563eb"))
+            current = event_type_color(store, event_type, fallback)
+            picked = color_cols[index % 3].color_picker(event_type, value=current, key=f"month_type_color_{event_type}")
+            if picked != current:
+                settings.setdefault("event_type_colors", {})[event_type] = picked
+                changed = True
+        if changed:
+            save_store(store)
+
+
+def tab_month(store):
+    settings = month_settings(store)
+    m1, m2 = st.columns([1, .5])
+    month_name = m1.selectbox("Mes", MONTHS_ES, index=date.today().month - 1, key="month_name")
+    year = m2.number_input("Año", min_value=2020, max_value=2100, value=date.today().year, step=1, key="month_year")
+    selected = date(int(year), MONTHS_ES.index(month_name) + 1, 1)
+    selected_day = selected_month_day(date.today(), selected)
+
+    st.markdown(f"<div class='section-title'>{month_name} {int(year)}</div>", unsafe_allow_html=True)
+    filters = ["Todos", "Entregas", "Exámenes", "Personales"]
+    active_filter = st.segmented_control("Filtro", filters, default="Todos", key="month_filter")
+    render_month_preferences(store)
+    render_month_legend(store, False, False)
+
+    weeks = month_visible_days(selected, bool(settings.get("month_show_weekends", True)))
+    visible_days = DAYS_ES if bool(settings.get("month_show_weekends", True)) else DAYS_ES[:5]
+    header = st.columns(len(visible_days))
+    for i, day in enumerate(visible_days):
+        header[i].markdown(f"<div class='month-week-head'>{day[:3]}</div>", unsafe_allow_html=True)
+    for week in weeks:
+        cols = st.columns(len(visible_days))
         for i, d in enumerate(week):
-            faded = " faded" if d.month != selected.month else ""
-            html = f"<div class='month-cell{faded}'><b>{d.day}</b>"
-            events = [e for e in store["events"] if e.get("date") == d.isoformat()]
-            for event in events[:5]:
-                label = f"{event.get('icon', chr(0x1F4CC))} {event.get('title', '')}"
-                html += f"<div class='month-event' style='border-left-color:{event.get('color', '#2563eb')}'>{label}</div>"
-            html += "</div>"
-            cols[i].markdown(html, unsafe_allow_html=True)
+            cols[i].markdown(render_month_cell(store, d, selected, active_filter, settings), unsafe_allow_html=True)
+
+    render_day_detail(store, selected_day, active_filter, settings)
 
     month_events = sorted(
         [event for event in store["events"] if parse_date(event.get("date")) and parse_date(event.get("date")).year == selected.year and parse_date(event.get("date")).month == selected.month],
@@ -1275,13 +1960,14 @@ def tab_month(store):
     if month_events:
         with st.expander("Eventos del mes", expanded=False):
             for event in month_events:
-                cols = st.columns([2.6, 1, .7])
-                cols[0].write(f"{event.get('icon', chr(0x1F4CC))} {event.get('title', '')}")
-                cols[1].write(event.get("date", ""))
-                if cols[2].button("Eliminar", key=f"del_event_{event['event_id']}"):
-                    store["events"] = [item for item in store["events"] if item.get("event_id") != event["event_id"]]
-                    save_store(store)
-                    st.rerun()
+                color = event.get("color") or event_type_color(store, event.get("type", "Personal"), "#2563eb")
+                st.markdown(
+                    f"<div class='month-detail-row' style='border-left-color:{color}; background:{pastel(color)}'>"
+                    f"<div class='month-detail-row-title'>{html_lib.escape(str(event.get('icon', chr(0x1F4CC)) + ' ' + event.get('title', 'Evento')))}</div>"
+                    f"<div class='month-detail-row-meta'>{event.get('date', '')} · {html_lib.escape(str(event.get('type', 'Evento')))}</div></div>",
+                    unsafe_allow_html=True,
+                )
+
 
 def todos_for_day(store, d):
     items = [item for item in store["todo_items"] if item.get("date") == d.isoformat()]
@@ -1334,23 +2020,155 @@ def update_reading_progress(store, item, pages_done):
         if key in existing_keys:
             continue
         new_item["order"] = len(store["todo_items"]) + len(clean_items)
+        ensure_todo_defaults(new_item)
         clean_items.append(new_item)
     store["todo_items"].extend(clean_items)
 
 
+def todo_section_items(store, start, end):
+    today = date.today()
+    overdue_ids = {item.get("todo_id") for item in overdue_todos(store)}
+    today_ids = {item.get("todo_id") for item in todos_for_day(store, today)}
+    week_items = []
+    completed = []
+    for item in store.get("todo_items", []):
+        item_date = parse_date(item.get("date"))
+        if not item_date:
+            continue
+        if item.get("done") and start <= item_date <= end:
+            completed.append(item)
+        elif start <= item_date <= end and item.get("todo_id") not in overdue_ids and item.get("todo_id") not in today_ids:
+            week_items.append(item)
+    return (
+        sorted(overdue_todos(store), key=lambda item: (item.get("date", ""), todo_priority_rank(item))),
+        [item for item in todos_for_day(store, today) if not item.get("done")],
+        sorted(week_items, key=lambda item: (item.get("date", ""), todo_priority_rank(item), int(item.get("order", 0)))),
+        sorted(completed, key=lambda item: (item.get("date", ""), int(item.get("order", 0)))),
+    )
+
+
+def render_todo_section_header(title, items):
+    st.markdown(
+        f"<div class='todo-section-head'><div class='todo-section-title'>{html_lib.escape(title)}</div>"
+        f"<div class='todo-section-count'>{len(items)}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_todo_card(store, item, key_prefix):
+    ensure_todo_defaults(item)
+    is_done = bool(item.get("done"))
+    is_overdue = not is_done and item.get("date", "") < date.today().isoformat()
+    color = "#b42318" if is_overdue else item.get("color", "#2563eb")
+    title_class = "text-decoration:line-through;color:#667085;" if is_done else ""
+    status_note = "Vencida" if is_overdue else "Completada" if is_done else item.get("date", "Sin fecha")
+
+    st.markdown(
+        f"<div class='todo-card-clean {'done' if is_done else ''}' style='border-left:5px solid {color}'>",
+        unsafe_allow_html=True,
+    )
+    c0, c1, c2 = st.columns([0.14, 2.7, 0.9])
+    done = c0.checkbox(
+        "Hecho",
+        value=is_done,
+        key=f"{key_prefix}_done_{item.get('todo_id')}",
+        label_visibility="collapsed",
+    )
+    c1.markdown(
+        f"<div style='font-weight:850;color:#101828;overflow-wrap:anywhere;{title_class}'>{html_lib.escape(item.get('title', 'Pendiente'))}</div>"
+        f"<div class='todo-card-meta'>{html_lib.escape(todo_meta_line(item))}</div>",
+        unsafe_allow_html=True,
+    )
+    c2.markdown(
+        f"<div style='text-align:right;font-size:.74rem;font-weight:850;color:{color};'>{html_lib.escape(status_note)}</div>",
+        unsafe_allow_html=True,
+    )
+
+    if done != is_done:
+        item["done"] = done
+        save_store(store)
+        st.rerun()
+
+    with st.expander("Editar detalles", expanded=False):
+        e1, e2 = st.columns([2.2, 0.9])
+        title = e1.text_input("Actividad", value=item.get("title", ""), key=f"{key_prefix}_title_{item.get('todo_id')}")
+        new_date = e2.date_input("Fecha", value=parse_date(item.get("date")) or date.today(), key=f"{key_prefix}_date_{item.get('todo_id')}")
+
+        m1, m2, m3 = st.columns([1, 1, 1])
+        priority = m1.selectbox(
+            "Prioridad",
+            ["Alta", "Media", "Baja"],
+            index=["Alta", "Media", "Baja"].index(item.get("priority", "Media")) if item.get("priority", "Media") in ["Alta", "Media", "Baja"] else 1,
+            key=f"{key_prefix}_priority_{item.get('todo_id')}",
+        )
+        energy = m2.selectbox(
+            "Energía",
+            ["Baja", "Normal", "Alta"],
+            index=["Baja", "Normal", "Alta"].index(item.get("energy", "Normal")) if item.get("energy", "Normal") in ["Baja", "Normal", "Alta"] else 1,
+            key=f"{key_prefix}_energy_{item.get('todo_id')}",
+        )
+        estimated = m3.number_input("Minutos", min_value=5, max_value=360, step=5, value=todo_minutes(item), key=f"{key_prefix}_minutes_{item.get('todo_id')}")
+
+        a1, a2, a3 = st.columns([1, 1, 1])
+        if a1.button("Subir", key=f"{key_prefix}_up_{item.get('todo_id')}", use_container_width=True):
+            move_todo(store, item["todo_id"], "up")
+            save_store(store)
+            st.rerun()
+        if a2.button("Bajar", key=f"{key_prefix}_down_{item.get('todo_id')}", use_container_width=True):
+            move_todo(store, item["todo_id"], "down")
+            save_store(store)
+            st.rerun()
+        if a3.button("Eliminar", key=f"{key_prefix}_delete_{item.get('todo_id')}", use_container_width=True):
+            store["todo_items"] = [t for t in store["todo_items"] if t.get("todo_id") != item.get("todo_id")]
+            save_store(store)
+            st.rerun()
+
+        changed = (
+            title != item.get("title")
+            or new_date.isoformat() != item.get("date")
+            or priority != item.get("priority")
+            or energy != item.get("energy")
+            or int(estimated) != todo_minutes(item)
+        )
+        if changed:
+            item["title"] = title
+            item["date"] = new_date.isoformat()
+            item["priority"] = priority
+            item["energy"] = energy
+            item["estimated_minutes"] = int(estimated)
+            save_store(store)
+
+        if item.get("meta", {}).get("kind") == "reading":
+            planned = int(item["meta"].get("page_end", 0)) - int(item["meta"].get("page_start", 0)) + 1
+            r1, r2 = st.columns([1, 2])
+            pages_done = r1.number_input("Páginas leídas", min_value=0, max_value=5000, value=planned, step=5, key=f"{key_prefix}_pages_{item.get('todo_id')}")
+            if r2.button("Actualizar lectura y replanificar", key=f"{key_prefix}_replan_{item.get('todo_id')}", use_container_width=True):
+                item["done"] = True
+                update_reading_progress(store, item, pages_done)
+                save_store(store)
+                st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
 def tab_todo(store):
+    settings = store.setdefault("settings", {})
+    settings.setdefault("todo_view_mode", "smart")
     selected = st.date_input("Semana de To-do", value=date.today(), key="todo_week")
     start = week_start(selected)
     end = start + timedelta(days=6)
     days = [start + timedelta(days=i) for i in range(7)]
-    st.markdown('<div class="section-title">To-do semanal</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">To-do inteligente</div>', unsafe_allow_html=True)
     st.caption(f"Semana del {start.strftime('%d/%m')} al {end.strftime('%d/%m')}")
 
     with st.form("manual_todo", clear_on_submit=True):
-        c1, c2, c3 = st.columns([2.4, 1, 1])
-        title = c1.text_input("Nuevo pendiente", placeholder="Leer paginas 1-62, revisar ensayo...")
-        selected_day = c2.selectbox("Dia", DAYS_ES, index=date.today().weekday())
+        c1, c2, c3 = st.columns([2.2, .9, 1])
+        title = c1.text_input("Nuevo pendiente", placeholder="Leer páginas 1-62, revisar ensayo...")
+        selected_day = c2.selectbox("Día", DAYS_ES, index=date.today().weekday())
         course = c3.text_input("Materia", value="General")
+        c4, c5, c6 = st.columns([1, 1, 1])
+        priority = c4.selectbox("Prioridad", ["Alta", "Media", "Baja"], index=1)
+        energy = c5.selectbox("Energía", ["Baja", "Normal", "Alta"], index=1)
+        estimated = c6.number_input("Minutos", min_value=5, max_value=360, value=30, step=5)
         if st.form_submit_button("Agregar pendiente", use_container_width=True) and title:
             target_date = days[DAYS_ES.index(selected_day)]
             course_id = ensure_course(store, course)
@@ -1363,6 +2181,9 @@ def tab_todo(store):
                 "done": False,
                 "order": len(store["todo_items"]),
                 "activity_id": "",
+                "priority": priority,
+                "estimated_minutes": int(estimated),
+                "energy": energy,
             })
             save_store(store)
             st.rerun()
@@ -1388,51 +2209,20 @@ def tab_todo(store):
                 st.success(f"Redistribuí {count} pendientes.")
                 st.rerun()
 
-    for idx, d in enumerate(days):
-        items = todos_for_day(store, d)
-        st.markdown(f"<div class='todo-list-day'><div class='day-title'>{DAYS_ES[idx]}</div><div class='day-date'>{d.strftime('%d/%m')}</div>", unsafe_allow_html=True)
+    overdue_items, today_items, week_items, completed_items = todo_section_items(store, start, end)
+    sections = [
+        ("Vencidos", overdue_items, "overdue"),
+        ("Hoy", today_items, "today"),
+        ("Esta semana", week_items, "week"),
+        ("Completados", completed_items, "done"),
+    ]
+    for title, items, key in sections:
+        render_todo_section_header(title, items)
         if not items:
-            st.caption("Sin pendientes")
+            st.caption("Sin pendientes en esta sección.")
+            continue
         for item in items:
-            is_overdue = not item.get("done") and item.get("date", "") < date.today().isoformat()
-            row_class = "todo-done" if item.get("done") else "todo-overdue" if is_overdue else ""
-            st.markdown(f"<div class='{row_class}'>", unsafe_allow_html=True)
-            cols = st.columns([0.12, 2.8, .7, .42, .42, .55])
-            done = cols[0].checkbox("", value=bool(item.get("done")), key=f"done_inline_{item['todo_id']}")
-            title = cols[1].text_input("Actividad", value=item.get("title", ""), key=f"title_inline_{item['todo_id']}", label_visibility="collapsed")
-            new_date = cols[2].date_input("Fecha", value=parse_date(item.get("date")) or d, key=f"date_inline_{item['todo_id']}", label_visibility="collapsed")
-            if is_overdue:
-                cols[1].markdown("<span style='color:#b42318;font-size:.74rem;font-weight:700'>Vencida</span>", unsafe_allow_html=True)
-            changed = done != bool(item.get("done")) or title != item.get("title") or new_date.isoformat() != item.get("date")
-            if changed:
-                item["done"] = done
-                item["title"] = title
-                item["date"] = new_date.isoformat()
-                save_store(store)
-            if cols[3].button("↑", key=f"up_inline_{item['todo_id']}"):
-                move_todo(store, item["todo_id"], "up")
-                save_store(store)
-                st.rerun()
-            if cols[4].button("↓", key=f"down_inline_{item['todo_id']}"):
-                move_todo(store, item["todo_id"], "down")
-                save_store(store)
-                st.rerun()
-            if cols[5].button("Eliminar", key=f"delete_inline_{item['todo_id']}"):
-                store["todo_items"] = [t for t in store["todo_items"] if t.get("todo_id") != item["todo_id"]]
-                save_store(store)
-                st.rerun()
-            if item.get("meta", {}).get("kind") == "reading":
-                planned = int(item["meta"].get("page_end", 0)) - int(item["meta"].get("page_start", 0)) + 1
-                p1, p2 = st.columns([1, 4])
-                pages_done = p1.number_input("Paginas leidas", min_value=0, max_value=5000, value=planned, step=5, key=f"pages_inline_{item['todo_id']}")
-                if p2.button("Actualizar lectura y replanificar", key=f"replan_inline_{item['todo_id']}"):
-                    item["done"] = True
-                    update_reading_progress(store, item, pages_done)
-                    save_store(store)
-                    st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
+            render_todo_card(store, item, key)
 
 def save_agent_plan(store, result):
     activity = result["activity"]
@@ -1448,6 +2238,7 @@ def save_agent_plan(store, result):
         item["color"] = color
         item.setdefault("done", False)
         item.setdefault("order", len(store["todo_items"]))
+        ensure_todo_defaults(item)
         store["todo_items"].append(item)
     if activity.get("deadline"):
         store["events"].append({

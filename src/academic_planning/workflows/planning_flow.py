@@ -44,28 +44,58 @@ def parse_date_from_text(text, today=None):
     return None
 
 
-def workload_score(day, context):
-    weekday = day.weekday()
-    day_key = day.isoformat()
-    class_minutes = 0
-    class_count = 0
+def day_class_windows(day, context):
+    windows = []
     for block in (context or {}).get("availability", []):
-        if int(block.get("day_index", -1)) != weekday:
+        if int(block.get("day_index", -1)) != day.weekday():
             continue
         try:
             start_h, start_m = [int(part) for part in str(block.get("start_time", "0:0")).split(":")[:2]]
             end_h, end_m = [int(part) for part in str(block.get("end_time", "0:0")).split(":")[:2]]
         except ValueError:
             continue
-        class_minutes += max(0, (end_h * 60 + end_m) - (start_h * 60 + start_m))
-        class_count += 1
+        start = start_h * 60 + start_m
+        end = end_h * 60 + end_m
+        if end > start:
+            windows.append((start, end))
+    return sorted(windows)
+
+
+def free_minutes_between_classes(day, context):
+    study_start = 7 * 60
+    study_end = 21 * 60
+    settings = (context or {}).get("settings", {})
+    for key, fallback in [("study_start", study_start), ("study_end", study_end)]:
+        try:
+            hour, minute = [int(part) for part in str(settings.get(key, "")).split(":")[:2]]
+            if key == "study_start":
+                study_start = hour * 60 + minute
+            else:
+                study_end = hour * 60 + minute
+        except ValueError:
+            pass
+    busy = day_class_windows(day, context)
+    free = max(0, study_end - study_start)
+    for start, end in busy:
+        free -= max(0, min(end, study_end) - max(start, study_start))
+    return max(0, free)
+
+
+def workload_score(day, context):
+    day_key = day.isoformat()
+    windows = day_class_windows(day, context)
+    class_minutes = sum(end - start for start, end in windows)
+    class_count = len(windows)
     todo_count = sum(1 for item in (context or {}).get("todo_items", []) if item.get("date") == day_key and not item.get("done"))
-    return class_minutes + class_count * 20 + todo_count * 60
+    overdue_pressure = sum(1 for item in (context or {}).get("todo_items", []) if not item.get("done") and item.get("date", "") < day_key)
+    free_minutes = free_minutes_between_classes(day, context)
+    free_bonus = min(180, free_minutes) * 0.35
+    return class_minutes + class_count * 25 + todo_count * 70 + overdue_pressure * 10 - free_bonus
 
 
 def prioritized_future_dates(today, deadline, context=None):
     days = future_dates(today, deadline)
-    return sorted(days, key=lambda day: (workload_score(day, context or {}), day))
+    return sorted(days, key=lambda day: (workload_score(day, context or {}), day.weekday() >= 5, day))
 
 
 def infer_type(text):
@@ -240,6 +270,7 @@ def llm_plan(message, context, today):
                 "Actua como Academic Planning Crew con Academic Coordinator, Task Analyzer, Academic Planner y Progress Monitor. "
                 "Devuelve JSON estricto. Si falta fecha, cantidad, paginas/capitulos o duración necesaria, pide aclaracion. "
                 "No planifiques en fechas pasadas. Para lecturas divide paginas/capitulos entre dias restantes. "
+                "Usa availability, todo_items y settings para preferir días con más minutos libres, menos clases y menos pendientes. "
                 "Para ensayos divide en tema/tesis, investigacion, bosquejo, desarrollo, conclusion y revisión. "
                 "Para laboratorios divide en partes y revisión."
             ),
