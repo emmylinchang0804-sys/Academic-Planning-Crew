@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -20,6 +21,7 @@ if str(SRC_DIR) not in sys.path:
 
 from academic_planning.crew import AcademicPlanningCrew
 from academic_planning.habits import (
+    habit_best_streak as core_habit_best_streak,
     habit_history as core_habit_history,
     habit_streak as core_habit_streak,
     habit_week_count as core_habit_week_count,
@@ -34,6 +36,12 @@ from academic_planning.profile import (
     default_profile,
     load_profile,
     save_profile,
+)
+from academic_planning.weekly_goals import (
+    GOAL_TYPES,
+    create_weekly_goal as build_weekly_goal,
+    week_start as goal_week_start,
+    weekly_goal_progress,
 )
 
 DATA_DIR = APP_DIR / "data"
@@ -75,6 +83,32 @@ EVENT_TYPES = {
     "Personal": {"icon": chr(0x2B50), "color": "#c4b5fd", "meaning": "personal"},
     "Descanso": {"icon": chr(0x1F319), "color": "#bfdbfe", "meaning": "descanso"},
 }
+APP_THEMES = {
+    "Lila": {"primary": "#8b5cf6", "dark": "#5b21b6", "soft": "#f5f3ff", "border": "#ddd6fe", "shadow": "rgba(88,28,135,.10)"},
+    "Azul": {"primary": "#2563eb", "dark": "#1e40af", "soft": "#eff6ff", "border": "#bfdbfe", "shadow": "rgba(30,64,175,.10)"},
+    "Verde": {"primary": "#059669", "dark": "#065f46", "soft": "#ecfdf5", "border": "#a7f3d0", "shadow": "rgba(6,95,70,.10)"},
+    "Rosa": {"primary": "#db2777", "dark": "#9d174d", "soft": "#fdf2f8", "border": "#fbcfe8", "shadow": "rgba(157,23,77,.10)"},
+    "Naranja": {"primary": "#ea580c", "dark": "#9a3412", "soft": "#fff7ed", "border": "#fed7aa", "shadow": "rgba(154,52,18,.10)"},
+    "Gris": {"primary": "#64748b", "dark": "#334155", "soft": "#f1f5f9", "border": "#cbd5e1", "shadow": "rgba(51,65,85,.10)"},
+}
+DEFAULT_APP_THEME = "Lila"
+DISPLAY_MODES = ["Claro", "Oscuro", "Automático"]
+DEFAULT_DASHBOARD_WIDGETS = {
+    "tasks": True,
+    "habits": True,
+    "calendar": True,
+    "statistics": True,
+    "goals": True,
+    "recent_activity": True,
+}
+DEFAULT_TODO_SECTIONS = {
+    "overdue": True,
+    "today": True,
+    "week": True,
+    "done": True,
+}
+
+
 def make_id(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
@@ -93,9 +127,10 @@ def default_store():
         "todo_items": [],
         "events": [],
         "habits": [],
+        "weekly_goals": [],
         "chat": [],
         "agent_log": [],
-        "settings": {"study_start": "07:00", "study_end": "21:00", "week_view_mode": "agenda", "show_weekends": True, "compact_schedule_cards": True, "month_view_density": "comfortable", "month_theme": "clean", "show_todos_in_month": False, "show_habits_in_month": False, "month_show_weekends": True, "event_type_colors": {}, "today_plan_mode": "balanced", "todo_view_mode": "smart"},
+        "settings": {"app_theme": DEFAULT_APP_THEME, "display_mode": "Automático", "dashboard_widgets": dict(DEFAULT_DASHBOARD_WIDGETS), "todo_sections": dict(DEFAULT_TODO_SECTIONS), "study_start": "07:00", "study_end": "21:00", "week_view_mode": "agenda", "show_weekends": True, "compact_schedule_cards": True, "month_view_density": "comfortable", "month_theme": "clean", "show_todos_in_month": False, "show_habits_in_month": False, "month_show_weekends": True, "event_type_colors": {}, "today_plan_mode": "balanced", "todo_view_mode": "smart"},
     }
 
 
@@ -111,7 +146,16 @@ def load_store():
         store.setdefault(key, value)
     load_profile(store)
     store.setdefault("todo_items", [])
+    store.setdefault("weekly_goals", [])
     store.setdefault("settings", {})
+    store["settings"].setdefault("app_theme", DEFAULT_APP_THEME)
+    store["settings"].setdefault("display_mode", "Automático")
+    widgets = store["settings"].setdefault("dashboard_widgets", {})
+    for key, visible in DEFAULT_DASHBOARD_WIDGETS.items():
+        widgets.setdefault(key, visible)
+    todo_sections = store["settings"].setdefault("todo_sections", {})
+    for key, visible in DEFAULT_TODO_SECTIONS.items():
+        todo_sections.setdefault(key, visible)
     store["settings"].setdefault("custom_schedule_colors", [])
     store["settings"].setdefault("week_view_mode", "agenda")
     store["settings"].setdefault("show_weekends", True)
@@ -129,6 +173,49 @@ def load_store():
     for item in store.get("todo_items", []):
         ensure_todo_defaults(item)
     return store
+
+
+def app_theme_name(store):
+    selected = str(store.get("settings", {}).get("app_theme", DEFAULT_APP_THEME))
+    return selected if selected in APP_THEMES else DEFAULT_APP_THEME
+
+
+def set_app_theme(store, theme_name):
+    selected = theme_name if theme_name in APP_THEMES else DEFAULT_APP_THEME
+    store.setdefault("settings", {})["app_theme"] = selected
+    return selected
+
+
+def display_mode(store):
+    selected = str(store.get("settings", {}).get("display_mode", "Automático"))
+    return selected if selected in DISPLAY_MODES else "Automático"
+
+
+def set_display_mode(store, mode):
+    selected = mode if mode in DISPLAY_MODES else "Automático"
+    store.setdefault("settings", {})["display_mode"] = selected
+    return selected
+
+
+def dashboard_preferences(store):
+    widgets = store.setdefault("settings", {}).setdefault("dashboard_widgets", {})
+    for key, visible in DEFAULT_DASHBOARD_WIDGETS.items():
+        widgets.setdefault(key, visible)
+    return widgets
+
+
+def todo_section_preferences(store):
+    sections = store.setdefault("settings", {}).setdefault("todo_sections", {})
+    for key, visible in DEFAULT_TODO_SECTIONS.items():
+        sections.setdefault(key, visible)
+    return sections
+
+
+def required_text(value, field_name):
+    clean = str(value or "").strip()
+    if not clean:
+        return "", f"Escribe {field_name} antes de guardar."
+    return clean, ""
 
 
 def short_todo_title(title):
@@ -190,6 +277,61 @@ def reset_store(keep_profile=False, keep_settings=True):
 def add_log(store, agent, action, payload=None):
     store["agent_log"].insert(0, {"time": now_iso(), "agent": agent, "action": action, "payload": payload or {}})
     store["agent_log"] = store["agent_log"][:120]
+
+
+def visible_agent_logs(store, limit=None):
+    logs = [
+        log for log in store.get("agent_log", [])
+        if str(log.get("agent", "")).strip().lower() != "integrations"
+        and "conectado (mock)" not in str(log.get("action", "")).lower()
+    ]
+    return logs[:limit] if limit is not None else logs
+
+
+def render_data_table(data, empty_message="Sin datos."):
+    frame = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+    if frame.empty:
+        st.caption(empty_message)
+        return
+    headers = "".join(f"<th>{html_lib.escape(str(column))}</th>" for column in frame.columns)
+    rows = []
+    for values in frame.fillna("").astype(str).itertuples(index=False, name=None):
+        cells = "".join(f"<td>{html_lib.escape(value)}</td>" for value in values)
+        rows.append(f"<tr>{cells}</tr>")
+    st.markdown(
+        f"<div class='app-table-wrap'><table class='app-table'><thead><tr>{headers}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def chart_colors(store):
+    theme = APP_THEMES[app_theme_name(store)]
+    dark = display_mode(store) == "Oscuro"
+    return {
+        "background": "#1f2937" if dark else "#ffffff",
+        "text": "#e5e7eb" if dark else "#344054",
+        "grid": "#475569" if dark else "#e4e7ec",
+        "primary": theme["primary"],
+        "secondary": "#38bdf8" if dark else "#0ea5e9",
+    }
+
+
+def styled_chart(chart, store, height=280):
+    colors = chart_colors(store)
+    return (
+        chart.properties(height=height, background=colors["background"])
+        .configure_view(stroke=colors["grid"])
+        .configure_axis(
+            labelColor=colors["text"],
+            titleColor=colors["text"],
+            domainColor=colors["grid"],
+            tickColor=colors["grid"],
+            gridColor=colors["grid"],
+        )
+        .configure_legend(labelColor=colors["text"], titleColor=colors["text"])
+        .configure_title(color=colors["text"])
+    )
 
 
 def parse_date(value):
@@ -689,6 +831,10 @@ def habit_streak(habit, end_day=None):
     return core_habit_streak(habit, end_day)
 
 
+def habit_best_streak(habit):
+    return core_habit_best_streak(habit)
+
+
 def habit_week_dates(selected=None):
     return core_habit_week_dates(selected)
 
@@ -748,7 +894,8 @@ def replan_overdue(store, mode):
     return len(items)
 
 
-def apply_css():
+def apply_css(store=None):
+    store = store or st.session_state.get("_app_store", {})
     st.markdown(
         """
         <style>
@@ -833,6 +980,16 @@ def apply_css():
         .todo-card-clean.done {background:#f8fafc; border-color:#edf2f7; opacity:.82;}
         .todo-card-meta {font-size:.75rem; color:#667085; margin:.15rem 0 .45rem;}
         .todo-section-head {display:flex; justify-content:space-between; gap:10px; align-items:center; margin:14px 0 8px;}
+        .todo-empty-note {font-size:.78rem; color:#667085; margin:-2px 0 6px; padding:2px 0;}
+        .recent-activity-row {display:grid; grid-template-columns:145px 180px 1fr; gap:12px; align-items:center; border:1px solid #e4e7ec; border-radius:8px; padding:9px 11px; margin-bottom:7px; background:#fff;}
+        .recent-activity-time {font-size:.72rem; color:#667085;}
+        .recent-activity-agent {font-size:.78rem; color:#344054; font-weight:800;}
+        .recent-activity-action {font-size:.82rem; color:#101828; font-weight:700;}
+        .app-table-wrap {width:100%; overflow-x:auto; border:1px solid #e4e7ec; border-radius:8px; background:#fff;}
+        .app-table {width:100%; border-collapse:collapse; font-size:.8rem;}
+        .app-table th {text-align:left; color:#667085; background:#f8fafc; font-weight:800; padding:9px 10px; border-bottom:1px solid #e4e7ec;}
+        .app-table td {color:#101828; padding:9px 10px; border-bottom:1px solid #eaecf0;}
+        .app-table tr:last-child td {border-bottom:0;}
         .todo-section-title {font-size:1rem; font-weight:850; color:#101828;}
         .todo-section-count {font-size:.74rem; font-weight:800; color:#667085; background:#f2f4f7; border-radius:999px; padding:3px 8px;}
         div[data-testid="stTextInput"] input {font-size:.86rem;}
@@ -1071,16 +1228,435 @@ def apply_css():
         """,
         unsafe_allow_html=True,
     )
+    theme = APP_THEMES[app_theme_name(store)]
+    mode = display_mode(store)
+    dark_css = """
+        .stApp, section[data-testid="stSidebar"] {background:#0f172a !important; color:#f8fafc !important;}
+        section[data-testid="stSidebar"] > div {background:linear-gradient(180deg,#111827 0%,#172033 100%) !important;}
+        header[data-testid="stHeader"] {
+            background:rgba(15,23,42,.96) !important;
+            border-bottom:1px solid #334155 !important;
+        }
+        header[data-testid="stHeader"] button,
+        header[data-testid="stHeader"] svg {color:#f8fafc !important; fill:#f8fafc !important;}
+        [data-testid="stToolbar"], [data-testid="stDecoration"] {background:transparent !important;}
+        .main .block-container {background:rgba(15,23,42,.97) !important; border-color:#475569 !important;}
+        .app-title, .section-title, .chat-hero-title, h1, h2, h3, h4,
+        p, label, span, [data-testid="stMarkdownContainer"] {color:#f8fafc !important;}
+        .app-subtitle, .dashboard-note, .smart-list-meta, .habit-meta, .subtle,
+        .todo-card-meta, .agenda-card-meta, .schedule-block-meta, .month-detail-row-meta,
+        [data-testid="stCaptionContainer"], small {color:#cbd5e1 !important;}
+        div[data-testid="stMetric"], .dashboard-card, .today-hero, .chat-hero, .habit-hero,
+        .week-summary-card, .agenda-day, .todo-card-clean, .month-cell, .month-detail,
+        .habit-stat-card, .habit-panel, .smart-list-card, .schedule-grid, .month-detail-row,
+        .agenda-card, .schedule-block, .habit-row-card, .todo-list-day, .week-toolbar,
+        .month-toolbar, .day-plan {
+            background:linear-gradient(
+                145deg,
+                color-mix(in srgb, var(--app-primary) 18%, #1f2937) 0%,
+                #172033 72%
+            ) !important;
+            border-color:#526174 !important; color:#f8fafc !important;
+        }
+        .today-hero, .chat-hero, .habit-hero, .dashboard-card, .week-summary-card {
+            background:linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--app-primary) 22%, #263449) 0%,
+                #172033 68%
+            ) !important;
+        }
+        input, textarea, [data-baseweb="select"] > div, [data-baseweb="input"] > div {
+            background:#111827 !important; color:#f8fafc !important; border-color:#64748b !important;
+        }
+        [data-testid="stTextInputRootElement"],
+        [data-testid="stDateInput"] [data-baseweb="input"],
+        [data-testid="stNumberInput"] [data-baseweb="input"] {
+            background:#111827 !important;
+            color:#f8fafc !important;
+            border-color:#64748b !important;
+        }
+        input::placeholder, textarea::placeholder {color:#94a3b8 !important; opacity:1 !important;}
+        [data-baseweb="select"] svg, [data-testid="stSelectbox"] svg {fill:#e2e8f0 !important;}
+        div[data-testid="stButton"] button:not([kind="primary"]),
+        div[data-testid="stFormSubmitButton"] button:not([kind="primary"]) {
+            background:#273449 !important; border-color:#64748b !important; color:#f8fafc !important;
+        }
+        [data-testid="stPopover"] > button,
+        [data-testid="stPopover"] button {
+            background:#273449 !important;
+            border-color:#64748b !important;
+            color:#f8fafc !important;
+        }
+        [data-testid="stPopover"] button p,
+        [data-testid="stPopover"] button span,
+        [data-testid="stPopover"] button svg {
+            color:#f8fafc !important;
+            fill:#f8fafc !important;
+        }
+        div[data-testid="stButton"] button:not([kind="primary"]):hover {
+            background:#334155 !important; border-color:var(--app-primary) !important;
+        }
+        [data-testid="stPopover"] button:hover {
+            background:#334155 !important;
+            border-color:var(--app-primary) !important;
+        }
+        [data-testid="stCheckbox"] label {
+            color:#f8fafc !important;
+        }
+        [data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child {
+            background:#334155 !important;
+            border:1px solid #94a3b8 !important;
+        }
+        [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > div:first-child,
+        [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input[aria-checked="true"]) > div:first-child {
+            background:var(--app-primary) !important;
+            border-color:var(--app-primary) !important;
+        }
+        [data-testid="stCheckbox"] [role="checkbox"],
+        [data-testid="stCheckbox"] [role="switch"] {
+            background:#334155 !important;
+            border-color:#94a3b8 !important;
+        }
+        [data-testid="stCheckbox"] [role="checkbox"][aria-checked="true"],
+        [data-testid="stCheckbox"] [role="switch"][aria-checked="true"] {
+            background:var(--app-primary) !important;
+            border-color:var(--app-primary) !important;
+        }
+        [data-testid="stButtonGroup"] [role="radiogroup"],
+        [data-testid="stButtonGroup"] div[data-baseweb="button-group"] {
+            background:#1e293b !important; border:1px solid #64748b !important;
+        }
+        [data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_control"] {
+            background:#1e293b !important; color:#e2e8f0 !important; border-color:#475569 !important;
+        }
+        [data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_control"] p,
+        [data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_control"] span {
+            color:#e2e8f0 !important;
+        }
+        [data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_controlActive"] {
+            background:var(--app-primary-dark) !important;
+            border-color:var(--app-primary) !important;
+            color:#ffffff !important;
+        }
+        [data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_controlActive"] p,
+        [data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_controlActive"] span {
+            color:#ffffff !important;
+        }
+        .dashboard-value, .smart-list-title, .habit-name, .month-detail-title,
+        .todo-card-title, .agenda-card-title, .schedule-block-title,
+        .month-detail-row-title, .day-title, .plan-title, .todo-section-title,
+        .today-hero-title, .habit-title, .week-summary-value {
+            color:#ffffff !important;
+        }
+        .habit-stat-value {color:#ffffff !important;}
+        .habit-stat-label, .habit-caption {color:#aebbd0 !important;}
+        .today-hero-note, .plan-meta, .dashboard-label, .week-summary-label,
+        .agenda-day-date, .dashboard-note {color:#cbd5e1 !important;}
+        .schedule-manager-title, .schedule-block-title, .agenda-card-title {
+            color:#ffffff !important;
+        }
+        .schedule-manager-meta, .schedule-block-meta, .agenda-card-meta,
+        .schedule-manager-head {color:#cbd5e1 !important;}
+        .schedule-manager-row {
+            background:linear-gradient(
+                145deg,
+                color-mix(in srgb, var(--app-primary) 12%, #1f2937) 0%,
+                #172033 100%
+            ) !important;
+            border-color:#526174 !important;
+        }
+        .schedule-grid {background:#111827 !important; border-color:#526174 !important;}
+        .schedule-grid th, .schedule-grid .schedule-time {
+            background:#1e293b !important;
+            color:#e2e8f0 !important;
+            border-color:#475569 !important;
+        }
+        .schedule-grid td {
+            background:#111827 !important;
+            border-color:#334155 !important;
+            color:#e2e8f0 !important;
+        }
+        .schedule-grid td:empty {background:#172033 !important;}
+        .schedule-block {
+            background:linear-gradient(
+                145deg,
+                color-mix(in srgb, var(--app-primary) 16%, #263449) 0%,
+                #1b2638 100%
+            ) !important;
+        }
+        .schedule-continuation {
+            background:color-mix(in srgb, var(--app-primary) 12%, #1b2638) !important;
+            opacity:.9 !important;
+        }
+        .habit-calendar-cell {
+            background:linear-gradient(
+                145deg,
+                color-mix(in srgb, var(--app-primary) 10%, #1f2937) 0%,
+                #172033 100%
+            ) !important;
+            border-color:#526174 !important;
+            box-shadow:0 6px 16px rgba(0,0,0,.16) !important;
+        }
+        .habit-calendar-cell.empty {
+            background:#141e2f !important;
+            border-color:#334155 !important;
+        }
+        .habit-calendar-day {color:#ffffff !important;}
+        .habit-calendar-note {color:#cbd5e1 !important;}
+        .habit-progress-track {background:#334155 !important;}
+        .month-week-head {
+            color:#e2e8f0 !important;
+        }
+        .month-empty {
+            background:#172033 !important;
+            color:#cbd5e1 !important;
+            border-color:#475569 !important;
+        }
+        .todo-section-count, .today-date-pill, .agenda-day-count, .habit-chip,
+        .month-legend-chip {background:#29364b !important; color:#f8fafc !important; border-color:#64748b !important;}
+        [data-testid="stAlert"] {
+            background:#172a4a !important; border-color:#365b8c !important; color:#f8fafc !important;
+        }
+        [data-testid="stAlert"] p, [data-testid="stAlert"] span {color:#f8fafc !important;}
+        [data-testid="stExpander"] details, [data-testid="stExpander"] summary {
+            background:#1e293b !important; border-color:#526174 !important; color:#f8fafc !important;
+        }
+        [data-testid="stExpander"] summary p, [data-testid="stExpander"] summary svg {
+            color:#f8fafc !important; fill:#f8fafc !important;
+        }
+        [data-testid="stPopoverBody"],
+        [data-testid="stPopoverBody"] > div,
+        [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] {
+            background:#1f2937 !important;
+            color:#f8fafc !important;
+        }
+        [data-testid="stPopoverBody"] {
+            border:1px solid #526174 !important;
+            box-shadow:0 20px 48px rgba(0,0,0,.38) !important;
+        }
+        [data-testid="stPopoverBody"] [data-testid="stTextInputRootElement"],
+        [data-testid="stPopoverBody"] [data-testid="stDateInput"] > div,
+        [data-testid="stPopoverBody"] [data-baseweb="select"] > div {
+            background:#111827 !important;
+            color:#f8fafc !important;
+            border-color:#64748b !important;
+        }
+        [data-baseweb="popover"], [data-baseweb="menu"], [data-baseweb="calendar"] {
+            background:#1f2937 !important;
+            color:#f8fafc !important;
+        }
+        [data-baseweb="menu"] li, [role="option"] {
+            background:#1f2937 !important;
+            color:#f8fafc !important;
+        }
+        [data-baseweb="menu"] li:hover, [role="option"]:hover {
+            background:#334155 !important;
+        }
+        [data-testid="stNumberInput"] button {
+            background:#273449 !important; color:#f8fafc !important; border-color:#64748b !important;
+        }
+        [data-testid="stNumberInput"] button svg {fill:#f8fafc !important;}
+        [data-testid="stDataFrame"] {
+            background:#1f2937 !important; border:1px solid #526174 !important; border-radius:8px !important;
+        }
+        [data-testid="stChatInput"] {
+            background:#1f2937 !important; border:1px solid #526174 !important; border-radius:12px !important;
+        }
+        [data-testid="stChatInput"] > div,
+        [data-testid="stChatInput"] textarea {
+            background:#111827 !important; color:#f8fafc !important;
+        }
+        [data-testid="stChatInput"] button {
+            background:var(--app-primary-dark) !important; color:#ffffff !important;
+        }
+        [data-testid="stChatInput"] button svg {fill:#ffffff !important;}
+        .chat-empty {
+            background:linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--app-primary) 14%, #1f2937) 0%,
+                #172033 100%
+            ) !important;
+            border-color:#526174 !important; color:#e2e8f0 !important;
+        }
+        [data-testid="stDownloadButton"] button {
+            background:var(--app-primary-dark) !important;
+            color:#ffffff !important;
+            border-color:var(--app-primary) !important;
+        }
+        [data-testid="stDownloadButton"] button p,
+        [data-testid="stDownloadButton"] button span {color:#ffffff !important;}
+        .app-table-wrap {background:#1f2937 !important; border-color:#526174 !important;}
+        .app-table th {background:#273449 !important; color:#dbeafe !important; border-color:#526174 !important;}
+        .app-table td {color:#f8fafc !important; border-color:#3f4d61 !important;}
+        .app-table tbody tr:nth-child(even) {background:#1b2638 !important;}
+        .recent-activity-row {
+            background:linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--app-primary) 12%, #1f2937) 0%,
+                #172033 100%
+            ) !important;
+            border-color:#526174 !important;
+        }
+        .recent-activity-time {color:#94a3b8 !important;}
+        .recent-activity-agent {color:#dbeafe !important;}
+        .recent-activity-action {color:#ffffff !important;}
+        hr, [data-testid="stSidebar"] hr {border-color:#475569 !important;}
+    """
+    mode_css = dark_css if mode == "Oscuro" else ""
+    automatic_css = f"@media (prefers-color-scheme: dark) {{{dark_css}}}" if mode == "Automático" else ""
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --app-primary: {theme["primary"]};
+            --app-primary-dark: {theme["dark"]};
+            --app-primary-soft: {theme["soft"]};
+            --app-primary-border: {theme["border"]};
+            --app-primary-shadow: {theme["shadow"]};
+        }}
+        .stApp {{
+            background:linear-gradient(180deg, #ffffff 0%, var(--app-primary-soft) 100%) !important;
+        }}
+        .main .block-container {{
+            background:rgba(255,255,255,.90) !important;
+            border-color:var(--app-primary-border) !important;
+        }}
+        .app-title, .section-title, .chat-hero-title {{
+            color:var(--app-primary-dark) !important;
+        }}
+        .app-title::after, .section-title::before, .section-title::after,
+        .today-hero::after, .chat-hero::after, .habit-hero::after,
+        .dashboard-card::after, .todo-card-clean::after, .agenda-day::after,
+        .month-cell::after, .agenda-card-title::before, .schedule-block-title::before,
+        .smart-list-title::before, .todo-section-title::before {{
+            color:var(--app-primary) !important;
+        }}
+        div[data-testid="stMetric"], .dashboard-card, .today-hero, .chat-hero,
+        .habit-hero, .week-summary-card, .agenda-day, .todo-card-clean,
+        .month-cell, .month-detail, .habit-stat-card, .habit-panel,
+        .smart-list-card, .schedule-grid {{
+            border-color:var(--app-primary-border) !important;
+            box-shadow:0 10px 28px var(--app-primary-shadow) !important;
+        }}
+        .today-hero, .chat-hero, .habit-hero, .dashboard-card,
+        .week-summary-card, .agenda-day, .todo-card-clean, .month-cell,
+        .habit-stat-card, .smart-list-card {{
+            background:linear-gradient(
+                135deg,
+                #ffffff 22%,
+                color-mix(in srgb, var(--app-primary) 12%, var(--app-primary-soft)) 100%
+            ) !important;
+        }}
+        .todo-card-clean, .agenda-card, .schedule-block, .habit-row-card,
+        .month-detail-row, .smart-list-card {{
+            background:linear-gradient(
+                145deg,
+                #ffffff 32%,
+                color-mix(in srgb, var(--app-primary) 10%, var(--app-primary-soft)) 100%
+            ) !important;
+        }}
+        div[data-testid="stMetric"] {{
+            border-top-color:var(--app-primary) !important;
+        }}
+        div[data-testid="stButton"] button[kind="primary"],
+        div[data-testid="stFormSubmitButton"] button {{
+            background:var(--app-primary) !important;
+            border-color:var(--app-primary) !important;
+            color:#ffffff !important;
+        }}
+        div[data-testid="stButton"] button:not([kind="primary"]) {{
+            border-color:var(--app-primary-border) !important;
+            color:var(--app-primary-dark) !important;
+        }}
+        div[data-testid="stButton"] button:hover,
+        div[data-testid="stFormSubmitButton"] button:hover {{
+            border-color:var(--app-primary-dark) !important;
+            color:var(--app-primary-dark);
+        }}
+        div[data-testid="stTabs"] button[aria-selected="true"],
+        .today-hero-kicker, .today-focus-title {{
+            color:var(--app-primary-dark) !important;
+        }}
+        .today-date-pill, .agenda-day-count, .todo-section-count,
+        .month-legend-chip, .habit-chip, .schedule-grid th, .schedule-time {{
+            background:var(--app-primary-soft) !important;
+            color:var(--app-primary-dark) !important;
+            border-color:var(--app-primary-border) !important;
+        }}
+        .plan-chip {{
+            background:var(--app-primary) !important;
+            box-shadow:0 8px 18px var(--app-primary-shadow) !important;
+        }}
+        .month-cell.today, .agenda-day.today {{
+            border-color:var(--app-primary) !important;
+            box-shadow:0 0 0 4px var(--app-primary-shadow) !important;
+        }}
+        {mode_css}
+        {automatic_css}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def sidebar_profile(store):
     with st.sidebar:
+        st.markdown("## Apariencia")
+        current_theme = app_theme_name(store)
+        selected_theme = st.selectbox(
+            "Color base",
+            list(APP_THEMES),
+            index=list(APP_THEMES).index(current_theme),
+            key="app_theme_selector",
+        )
+        if selected_theme != current_theme:
+            set_app_theme(store, selected_theme)
+            save_store(store)
+            st.rerun()
+        current_mode = display_mode(store)
+        selected_mode = st.segmented_control(
+            "Modo",
+            DISPLAY_MODES,
+            default=current_mode,
+            key="display_mode_selector",
+        )
+        if selected_mode and selected_mode != current_mode:
+            set_display_mode(store, selected_mode)
+            save_store(store)
+            st.rerun()
+        st.caption("La preferencia se guarda en la memoria local.")
+        with st.expander("Widgets de Hoy", expanded=False):
+            widgets = dashboard_preferences(store)
+            widget_labels = {
+                "tasks": "Próximas tareas",
+                "habits": "Hábitos",
+                "calendar": "Calendario",
+                "statistics": "Estadísticas",
+                "goals": "Metas",
+                "recent_activity": "Actividad reciente",
+            }
+            changed = False
+            for key, label in widget_labels.items():
+                selected = st.checkbox(label, value=bool(widgets.get(key, True)), key=f"dashboard_widget_{key}")
+                if widgets.get(key) != selected:
+                    widgets[key] = selected
+                    changed = True
+            if changed:
+                save_store(store)
+        st.divider()
         st.markdown("## Perfil del Estudiante")
         profile = load_profile(store)
         with st.form("profile"):
             profile["name"] = st.text_input("Nombre", profile.get("name", ""))
             profile["email"] = st.text_input("Correo electrónico", profile.get("email", ""))
             profile["academic_level"] = st.text_input("Grado o nivel académico", profile.get("academic_level", ""))
+            profile["primary_goal"] = st.text_input("Objetivo principal", profile.get("primary_goal", ""))
+            profile["favorite_theme"] = st.selectbox(
+                "Tema favorito",
+                list(APP_THEMES),
+                index=list(APP_THEMES).index(profile.get("favorite_theme", DEFAULT_APP_THEME)) if profile.get("favorite_theme") in APP_THEMES else 0,
+            )
+            profile["main_weekly_goal"] = st.text_input("Meta semanal principal", profile.get("main_weekly_goal", ""))
             profile["timezone"] = st.text_input("Zona horaria", profile.get("timezone", "America/Guatemala"))
             profile["study_preferences"] = st.text_area("Preferencias de estudio (opcional)", profile.get("study_preferences", ""), height=70)
             if st.form_submit_button("Guardar perfil", use_container_width=True):
@@ -1829,6 +2405,89 @@ def render_smart_item(title, meta, color="#2563eb", done=False):
     )
 
 
+def render_recent_activity(store, limit=5):
+    logs = visible_agent_logs(store, limit)
+    if not logs:
+        st.caption("Todavía no hay actividad registrada.")
+        return
+    for log in logs:
+        st.markdown(
+            f"<div class='recent-activity-row'>"
+            f"<div class='recent-activity-time'>{html_lib.escape(str(log.get('time', '')))}</div>"
+            f"<div class='recent-activity-agent'>{html_lib.escape(str(log.get('agent', 'Sistema')))}</div>"
+            f"<div class='recent-activity-action'>{html_lib.escape(str(log.get('action', 'Actividad registrada')))}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def create_goal(store, title, goal_type, target, start_day=None):
+    try:
+        goal = build_weekly_goal(
+            title,
+            goal_type,
+            target,
+            start_day=start_day,
+            goal_id=make_id("goal"),
+        )
+    except (TypeError, ValueError) as exc:
+        return False, str(exc)
+    store.setdefault("weekly_goals", []).append(goal)
+    add_log(store, "Progress Monitor", "Meta semanal creada", {"goal": goal["title"]})
+    save_store(store)
+    return True, ""
+
+
+def active_weekly_goals(store, reference_day=None):
+    current_start = goal_week_start(reference_day).isoformat()
+    return [
+        goal for goal in store.get("weekly_goals", [])
+        if goal.get("week_start") == current_start
+    ]
+
+
+def render_weekly_goals(store, editable=False):
+    goals = active_weekly_goals(store)
+    if editable:
+        with st.expander("Agregar meta semanal", expanded=not goals):
+            with st.form("weekly_goal_form", clear_on_submit=True):
+                title = st.text_input("Meta", placeholder="Estudiar 10 horas")
+                goal_label = st.selectbox("Tipo", list(GOAL_TYPES.values()))
+                target = st.number_input("Objetivo", min_value=1.0, value=5.0, step=1.0)
+                if st.form_submit_button("Crear meta", use_container_width=True):
+                    goal_type = next(key for key, label in GOAL_TYPES.items() if label == goal_label)
+                    saved, error = create_goal(store, title, goal_type, target)
+                    if saved:
+                        st.rerun()
+                    st.error(error)
+    if not goals:
+        st.info("No hay metas para esta semana.")
+        return
+    for goal in goals:
+        progress = weekly_goal_progress(goal, store)
+        c1, c2 = st.columns([1, .18])
+        with c1:
+            st.markdown(f"**{goal.get('title', 'Meta semanal')}**")
+            unit = "h" if goal.get("goal_type") == "study_hours" else ""
+            st.caption(f"{progress['current']}{unit} de {progress['target']:g}{unit}")
+            st.progress(progress["percentage"])
+        if editable and c2.button("Eliminar", key=f"delete_goal_{goal.get('goal_id')}"):
+            store["weekly_goals"] = [
+                item for item in store.get("weekly_goals", [])
+                if item.get("goal_id") != goal.get("goal_id")
+            ]
+            save_store(store)
+            st.rerun()
+
+
+def motivational_message(profile, pending_tasks, pending_habits):
+    name = str(profile.get("name") or "").strip()
+    greeting = f"Buenos días, {name}." if name else "Buenos días."
+    if not pending_tasks and not pending_habits:
+        return greeting, "Tu día está al día. Puedes avanzar con calma en tu objetivo principal."
+    return greeting, f"Tienes {pending_tasks} tareas y {pending_habits} hábitos pendientes hoy."
+
+
 def tab_today(store):
     today = date.today()
     day_idx = today.weekday()
@@ -1847,6 +2506,15 @@ def tab_today(store):
         if event_date and today <= event_date <= today + timedelta(days=14):
             upcoming_events.append(event)
     upcoming_events.sort(key=lambda item: item.get("date", ""))
+    today_events = [event for event in upcoming_events if event.get("date") == today.isoformat()]
+    pending_habits = [habit for habit in store.get("habits", []) if not is_habit_done(habit, today)]
+    widgets = dashboard_preferences(store)
+    profile = load_profile(store)
+    greeting, motivation = motivational_message(
+        profile,
+        len([item for item in today_todos if not item.get("done")]),
+        len(pending_habits),
+    )
 
     next_class = next_class_for_today(today_classes)
     urgent = overdue[0] if overdue else next((item for item in today_todos if not item.get("done")), None)
@@ -1862,19 +2530,25 @@ def tab_today(store):
         f"</div><div class='today-date-pill'>{DAYS_ES[day_idx]} {today.strftime('%d/%m')}</div></div></div>",
         unsafe_allow_html=True,
     )
+    st.markdown(f"### {greeting}")
+    st.write(motivation)
+    if profile.get("primary_goal"):
+        st.caption(f"Objetivo principal: {profile['primary_goal']}")
 
-    d1, d2, d3, d4 = st.columns(4)
-    with d1:
-        render_dashboard_card("Próxima clase", next_class.get("title", "Sin clases") if next_class else "Sin clases", f"{next_class.get('start_time')} - {next_class.get('end_time')}" if next_class else "Horario despejado")
-    with d2:
-        render_dashboard_card("Pendiente urgente", urgent.get("title", "Nada urgente") if urgent else "Nada urgente", todo_meta_line(urgent) if urgent else "Sin vencidos ni tareas de hoy")
-    with d3:
-        render_dashboard_card("Próximo evento", next_event.get("title", "Sin eventos") if next_event else "Sin eventos", next_event.get("date", "Próximos 14 días limpios") if next_event else "Próximos 14 días limpios")
-    with d4:
-        render_dashboard_card("Avance del día", f"{progress_pct}%", f"{done_today}/{total_today} pendientes completados" if total_today else "Sin pendientes hoy")
+    if widgets["statistics"]:
+        d1, d2, d3, d4 = st.columns(4)
+        with d1:
+            render_dashboard_card("Próxima clase", next_class.get("title", "Sin clases") if next_class else "Sin clases", f"{next_class.get('start_time')} - {next_class.get('end_time')}" if next_class else "Horario despejado")
+        with d2:
+            render_dashboard_card("Pendiente urgente", urgent.get("title", "Nada urgente") if urgent else "Nada urgente", todo_meta_line(urgent) if urgent else "Sin vencidos ni tareas de hoy")
+        with d3:
+            render_dashboard_card("Eventos hoy", len(today_events), next_event.get("title", "Sin eventos") if next_event else "Agenda despejada")
+        with d4:
+            render_dashboard_card("Avance del día", f"{progress_pct}%", f"{done_today}/{total_today} pendientes completados" if total_today else "Sin pendientes hoy")
 
-    st.subheader("Planear mi día")
-    render_day_plan(build_day_plan(store, today, today_classes, today_todos, overdue, upcoming_events))
+    if widgets["tasks"]:
+        st.subheader("Planear mi día")
+        render_day_plan(build_day_plan(store, today, today_classes, today_todos, overdue, upcoming_events))
 
     with st.expander("Filtros de hoy", expanded=False):
         status = st.radio("Estado", ["Todo", "Pendientes", "Vencidos", "Completados"], horizontal=True, key="today_status_filter")
@@ -1906,9 +2580,11 @@ def tab_today(store):
             )
     with c2:
         st.subheader("Pendientes")
-        if not filtered_todos:
+        if not widgets["tasks"]:
+            st.caption("Widget oculto desde la configuración lateral.")
+        elif not filtered_todos:
             st.info("Sin pendientes con esos filtros.")
-        for index, item in enumerate(filtered_todos):
+        for index, item in enumerate(filtered_todos if widgets["tasks"] else []):
             widget_id = f"{item.get('todo_id') or 'todo'}_{index}"
             t0, t1 = st.columns([0.14, 1])
             checked = t0.checkbox(
@@ -1926,21 +2602,33 @@ def tab_today(store):
 
     c3, c4 = st.columns([1, 1])
     with c3:
-        st.subheader("Próximos eventos")
-        if not upcoming_events:
-            st.caption("Sin eventos en los próximos 14 días.")
-        for event in upcoming_events[:8]:
+        st.subheader("Eventos de hoy")
+        if not widgets["calendar"]:
+            st.caption("Widget oculto desde la configuración lateral.")
+        elif not today_events:
+            st.caption("Sin eventos para hoy.")
+        for event in today_events if widgets["calendar"] else []:
             render_smart_item(
                 f"{event.get('icon', chr(0x1F4CC))} {event.get('title', '')}",
                 event.get("date", ""),
                 event.get("color", "#2563eb"),
             )
     with c4:
-        st.subheader("Alertas")
-        if not overdue:
-            st.caption("No tienes pendientes vencidos.")
-        for item in overdue[:8]:
-            render_smart_item(item.get("title", "Pendiente"), f"Venció: {item.get('date', '')} · {todo_minutes(item)} min", "#b42318")
+        st.subheader("Hábitos pendientes")
+        if not widgets["habits"]:
+            st.caption("Widget oculto desde la configuración lateral.")
+        elif not pending_habits:
+            st.caption("Todos los hábitos están completos.")
+        for habit in pending_habits if widgets["habits"] else []:
+            render_smart_item(habit.get("title", "Hábito"), f"Racha actual: {habit_streak(habit)} días", habit.get("color", "#8b5cf6"))
+
+    if widgets["goals"]:
+        st.subheader("Metas semanales")
+        render_weekly_goals(store, editable=True)
+
+    if widgets["recent_activity"]:
+        st.subheader("Actividad reciente")
+        render_recent_activity(store)
 
 def month_settings(store):
     settings = store.setdefault("settings", {})
@@ -2091,13 +2779,37 @@ def selected_month_day(default_day, selected_month):
     return default_day if default_day.month == selected_month.month else selected_month
 
 
+def create_event(store, title, event_date, event_type, color):
+    clean_title, error = required_text(title, "un título para el evento")
+    if error:
+        return False, error
+    if not isinstance(event_date, date):
+        return False, "Selecciona una fecha válida para el evento."
+    store["events"].append({
+        "event_id": make_id("event"),
+        "title": clean_title,
+        "date": event_date.isoformat(),
+        "icon": EVENT_TYPES.get(event_type, EVENT_TYPES["Personal"])["icon"],
+        "type": event_type,
+        "color": color,
+    })
+    save_store(store)
+    return True, ""
+
+
 def save_event_from_detail(store, event, title, event_date, event_type, color):
-    event["title"] = title.strip() or event.get("title", "Evento")
+    clean_title, error = required_text(title, "un título para el evento")
+    if error:
+        return False, error
+    if not isinstance(event_date, date):
+        return False, "Selecciona una fecha válida para el evento."
+    event["title"] = clean_title
     event["date"] = event_date.isoformat()
     event["type"] = event_type
     event["icon"] = EVENT_TYPES.get(event_type, EVENT_TYPES["Personal"])["icon"]
     event["color"] = color
     save_store(store)
+    return True, ""
 
 
 def render_day_detail(store, day, active_filter, settings):
@@ -2119,17 +2831,11 @@ def render_day_detail(store, day, active_filter, settings):
             event_date = st.date_input("Fecha", value=day, key=f"event_date_detail_{day.isoformat()}")
             event_type = st.selectbox("Tipo", list(EVENT_TYPES.keys()), key=f"event_type_detail_{day.isoformat()}")
             color = st.color_picker("Color", event_type_color(store, event_type, EVENT_TYPES[event_type]["color"]), key=f"event_color_detail_{day.isoformat()}")
-            if st.form_submit_button("Guardar evento", use_container_width=True) and title:
-                store["events"].append({
-                    "event_id": make_id("event"),
-                    "title": title.strip(),
-                    "date": event_date.isoformat(),
-                    "icon": EVENT_TYPES[event_type]["icon"],
-                    "type": event_type,
-                    "color": color,
-                })
-                save_store(store)
-                st.rerun()
+            if st.form_submit_button("Guardar evento", use_container_width=True):
+                saved, error = create_event(store, title, event_date, event_type, color)
+                if saved:
+                    st.rerun()
+                st.error(error)
     if classes:
         with st.expander("Clases fijas de este día", expanded=False):
             for block in classes:
@@ -2157,8 +2863,10 @@ def render_day_detail(store, day, active_filter, settings):
             picked_color = e4.color_picker("Color", value=color, key=f"month_edit_color_{event_id}")
             b1, b2 = st.columns([1, 1])
             if b1.button("Guardar cambios", key=f"month_save_event_{event_id}", use_container_width=True):
-                save_event_from_detail(store, event, title, event_date, event_type, picked_color)
-                st.rerun()
+                saved, error = save_event_from_detail(store, event, title, event_date, event_type, picked_color)
+                if saved:
+                    st.rerun()
+                st.error(error)
             confirm = st.checkbox("Confirmar eliminación", key=f"month_confirm_delete_{event_id}")
             if b2.button("Eliminar", key=f"month_delete_event_{event_id}", use_container_width=True, disabled=not confirm):
                 store["events"] = [item for item in store["events"] if item.get("event_id") != event_id]
@@ -2385,7 +3093,7 @@ def render_todo_card(store, item, key_prefix):
     if item.get("description"):
         description_html = f"<div class='todo-card-meta'>{html_lib.escape(item.get('description', ''))}</div>"
     c1.markdown(
-        f"<div style='font-weight:850;color:#101828;overflow-wrap:anywhere;{title_class}'>{html_lib.escape(item.get('title', 'Pendiente'))}</div>"
+        f"<div class='todo-card-title' style='font-weight:850;overflow-wrap:anywhere;{title_class}'>{html_lib.escape(item.get('title', 'Pendiente'))}</div>"
         f"{description_html}"
         f"<div class='todo-card-meta'>{html_lib.escape(todo_meta_line(item))}</div>",
         unsafe_allow_html=True,
@@ -2467,12 +3175,35 @@ def render_todo_card(store, item, key_prefix):
 def tab_todo(store):
     settings = store.setdefault("settings", {})
     settings.setdefault("todo_view_mode", "smart")
+    section_preferences = todo_section_preferences(store)
     selected = st.date_input("Semana de To-do", value=date.today(), key="todo_week")
     start = week_start(selected)
     end = start + timedelta(days=6)
     days = [start + timedelta(days=i) for i in range(7)]
     st.markdown('<div class="section-title">To-do inteligente</div>', unsafe_allow_html=True)
     st.caption(f"Semana del {start.strftime('%d/%m')} al {end.strftime('%d/%m')}")
+
+    with st.expander("Secciones visibles", expanded=False):
+        labels = {
+            "overdue": "Vencidos",
+            "today": "Hoy",
+            "week": "Esta semana",
+            "done": "Completados",
+        }
+        columns = st.columns(4)
+        changed = False
+        for column, (key, label) in zip(columns, labels.items()):
+            visible = column.checkbox(
+                label,
+                value=bool(section_preferences.get(key, True)),
+                key=f"todo_section_visible_{key}",
+            )
+            if section_preferences.get(key) != visible:
+                section_preferences[key] = visible
+                changed = True
+        if changed:
+            save_store(store)
+            st.rerun()
 
     with st.form("manual_todo", clear_on_submit=True):
         c1, c2, c3 = st.columns([2.2, .9, 1])
@@ -2538,15 +3269,29 @@ def tab_todo(store):
         ("Completados", completed_items, "done"),
     ]
     for title, items, key in sections:
+        if not section_preferences.get(key, True):
+            continue
         render_todo_section_header(title, items)
         if not items:
-            st.caption("Sin pendientes en esta sección.")
+            st.markdown("<div class='todo-empty-note'>Sin pendientes.</div>", unsafe_allow_html=True)
             continue
         for index, item in enumerate(items):
             render_todo_card(store, item, f"{key}_{index}")
 
 def save_agent_plan(store, result):
-    activity = result["activity"]
+    activity = dict(result.get("activity") or {})
+    title, error = required_text(activity.get("title"), "un nombre para la actividad")
+    if error:
+        return False, error
+    activity["title"] = title
+    raw_deadline = activity.get("deadline")
+    deadline = parse_date(raw_deadline) if raw_deadline else None
+    if raw_deadline and not deadline:
+        return False, "La fecha límite de la actividad no es válida."
+    if deadline and deadline < date.today():
+        return False, "La fecha límite no puede estar en el pasado."
+    if deadline:
+        activity["deadline"] = deadline.isoformat()
     course_id = ensure_course(store, activity.get("course", "General"))
     activity["course_id"] = course_id
     activity["activity_id"] = make_id("act")
@@ -2589,6 +3334,7 @@ def save_agent_plan(store, result):
     store["chat"].append({"role": "assistant", "content": response, "time": now_iso()})
     add_log(store, "Academic Planning Crew", "Plan confirmado y guardado", {"items": saved_count, "duplicates_skipped": skipped_count})
     save_store(store)
+    return True, response
 
 
 def tab_chat(store):
@@ -2608,8 +3354,9 @@ def tab_chat(store):
             save_store(store)
             st.success("Historial del chat limpiado.")
             st.rerun()
-        if store["agent_log"]:
-            st.dataframe(pd.DataFrame(store["agent_log"][:6]), use_container_width=True, hide_index=True)
+        recent_logs = visible_agent_logs(store, 6)
+        if recent_logs:
+            render_data_table(pd.DataFrame(recent_logs))
     if not store.get("chat"):
         st.markdown("<div class='chat-empty'>Sin mensajes anteriores. Puedes empezar una conversación nueva.</div>", unsafe_allow_html=True)
     for msg in store["chat"][-8:]:
@@ -2631,10 +3378,12 @@ def tab_chat(store):
                 )
             p1, p2 = st.columns([1, 1])
             if p1.button("Confirmar y guardar", use_container_width=True):
-                save_agent_plan(store, pending)
-                st.session_state.pop("pending_agent_plan", None)
-                st.success("Plan guardado.")
-                st.rerun()
+                saved, message = save_agent_plan(store, pending)
+                if saved:
+                    st.session_state.pop("pending_agent_plan", None)
+                    st.success("Plan guardado.")
+                    st.rerun()
+                st.error(message)
             if p2.button("Descartar propuesta", use_container_width=True):
                 store["chat"].append({"role": "assistant", "content": "Propuesta descartada. Puedes pedirme otra versión.", "time": now_iso()})
                 st.session_state.pop("pending_agent_plan", None)
@@ -2751,16 +3500,25 @@ def tab_statistics(store):
         st.subheader("Carga por materia")
         if stats["course_load"]:
             load_df = pd.DataFrame(stats["course_load"])
-            chart_df = load_df.set_index("Materia")[["Minutos"]].rename(columns={"Minutos": "Minutos estimados"})
-            st.bar_chart(chart_df, use_container_width=True)
-            st.dataframe(load_df, use_container_width=True, hide_index=True)
+            colors = chart_colors(store)
+            load_chart = alt.Chart(load_df).mark_bar(
+                color=colors["primary"],
+                cornerRadiusTopLeft=5,
+                cornerRadiusTopRight=5,
+            ).encode(
+                x=alt.X("Materia:N", sort="-y", title=None),
+                y=alt.Y("Minutos:Q", title="Minutos estimados"),
+                tooltip=["Materia", "Minutos", "Pendientes", "Completadas"],
+            )
+            st.altair_chart(styled_chart(load_chart, store), use_container_width=True)
+            render_data_table(load_df)
         else:
             st.info("Todavia no hay pendientes con materia para calcular carga.")
 
     with right:
         st.subheader("Actividades proximas")
         if stats["upcoming"]:
-            st.dataframe(pd.DataFrame(stats["upcoming"]), use_container_width=True, hide_index=True)
+            render_data_table(pd.DataFrame(stats["upcoming"]))
         else:
             st.info("No hay pendientes ni eventos proximos registrados.")
 
@@ -2770,7 +3528,97 @@ def tab_statistics(store):
             {"Fuente": "Habitos semanales", "Completado": stats["habit_done"], "Total": stats["habit_target"]},
             {"Fuente": "Progress", "Completado": stats["progress_done"], "Total": stats["progress_total"]},
         ])
-        st.dataframe(summary, use_container_width=True, hide_index=True)
+        render_data_table(summary)
+
+    st.subheader("Tendencias")
+    chart_left, chart_right = st.columns(2)
+    today = date.today()
+    last_days = [today - timedelta(days=offset) for offset in range(6, -1, -1)]
+    with chart_left:
+        completed_by_week = []
+        current_week = goal_week_start(today)
+        for offset in range(5, -1, -1):
+            start = current_week - timedelta(days=offset * 7)
+            end = start + timedelta(days=6)
+            completed_by_week.append({
+                "Semana": start.strftime("%d/%m"),
+                "Tareas": sum(
+                    1 for item in store.get("todo_items", [])
+                    if item.get("done") and start.isoformat() <= item.get("date", "") <= end.isoformat()
+                ),
+                "Hábitos": sum(
+                    1 for habit in store.get("habits", [])
+                    for day, completed in (habit.get("history") or {}).items()
+                    if completed and start.isoformat() <= day <= end.isoformat()
+                ),
+            })
+        st.caption("Tareas y hábitos completados por semana")
+        completed_df = pd.DataFrame(completed_by_week).melt(
+            id_vars=["Semana"],
+            value_vars=["Tareas", "Hábitos"],
+            var_name="Tipo",
+            value_name="Completados",
+        )
+        colors = chart_colors(store)
+        completed_chart = alt.Chart(completed_df).mark_bar(
+            cornerRadiusTopLeft=4,
+            cornerRadiusTopRight=4,
+        ).encode(
+            x=alt.X("Semana:N", title=None),
+            y=alt.Y("Completados:Q", title="Completados"),
+            color=alt.Color(
+                "Tipo:N",
+                scale=alt.Scale(range=[colors["primary"], colors["secondary"]]),
+                legend=alt.Legend(title=None),
+            ),
+            xOffset="Tipo:N",
+            tooltip=["Semana", "Tipo", "Completados"],
+        )
+        st.altair_chart(styled_chart(completed_chart, store), use_container_width=True)
+
+    with chart_right:
+        activity_by_day = []
+        for day in last_days:
+            day_key = day.isoformat()
+            activity_by_day.append({
+                "Día": day.strftime("%d/%m"),
+                "Acciones": sum(1 for log in visible_agent_logs(store) if str(log.get("time", "")).startswith(day_key)),
+            })
+        st.caption("Actividad registrada · últimos 7 días")
+        activity_df = pd.DataFrame(activity_by_day)
+        activity_chart = alt.Chart(activity_df).mark_line(
+            color=chart_colors(store)["primary"],
+            point=True,
+            strokeWidth=3,
+        ).encode(
+            x=alt.X("Día:N", title=None),
+            y=alt.Y("Acciones:Q", title="Acciones"),
+            tooltip=["Día", "Acciones"],
+        )
+        st.altair_chart(styled_chart(activity_chart, store), use_container_width=True)
+
+    st.subheader("Progreso de metas")
+    goals = active_weekly_goals(store)
+    if goals:
+        goal_rows = []
+        for goal in goals:
+            goal_progress = weekly_goal_progress(goal, store)
+            goal_rows.append({
+                "Meta": goal.get("title", "Meta"),
+                "Progreso": goal_progress["percentage"],
+            })
+        goal_df = pd.DataFrame(goal_rows)
+        goal_chart = alt.Chart(goal_df).mark_bar(
+            color=chart_colors(store)["primary"],
+            cornerRadiusEnd=5,
+        ).encode(
+            y=alt.Y("Meta:N", sort="-x", title=None),
+            x=alt.X("Progreso:Q", scale=alt.Scale(domain=[0, 100]), title="Progreso (%)"),
+            tooltip=["Meta", "Progreso"],
+        )
+        st.altair_chart(styled_chart(goal_chart, store, height=220), use_container_width=True)
+    else:
+        st.info("Crea una meta semanal desde Hoy para ver su progreso aquí.")
 
 
 def tab_progress(store):
@@ -2840,11 +3688,37 @@ def render_habit_stats(store, days):
     total_week = sum(max(1, int(habit.get("weekly_target", 5) or 5)) for habit in habits)
     completed_week = sum(min(habit_week_count(habit, days), max(1, int(habit.get("weekly_target", 5) or 5))) for habit in habits)
     weekly_progress = round(completed_week / total_week * 100) if total_week else 0
-    best_streak = max([habit_streak(habit) for habit in habits] or [0])
-    c1, c2, c3 = st.columns(3)
-    cards = [(c1, "Mejor racha", f"{best_streak} días", "Constancia activa"), (c2, "Progreso semanal", f"{weekly_progress}%", f"{completed_week}/{total_week} marcas" if total_week else "Sin hábitos"), (c3, "Completados hoy", f"{completed_today}/{len(habits)}", "Avance de hoy")]
+    current_streak = max([habit_streak(habit) for habit in habits] or [0])
+    best_streak = max([habit_best_streak(habit) for habit in habits] or [0])
+    c1, c2, c3, c4 = st.columns(4)
+    cards = [
+        (c1, "Racha actual", f"🔥 {current_streak} días", "Constancia activa"),
+        (c2, "Mejor racha", f"🔥 {best_streak} días", "Histórico"),
+        (c3, "Progreso semanal", f"{weekly_progress}%", f"{completed_week}/{total_week} marcas" if total_week else "Sin hábitos"),
+        (c4, "Completados hoy", f"{completed_today}/{len(habits)}", "Avance de hoy"),
+    ]
     for col, label, value, caption in cards:
         col.markdown(f"""<div class="habit-stat-card"><div class="habit-stat-label">{label}</div><div class="habit-stat-value">{value}</div><div class="habit-caption">{caption}</div></div>""", unsafe_allow_html=True)
+
+
+def create_habit(store, title, category="", target=5):
+    clean_title, error = required_text(title, "un nombre para el hábito")
+    if error:
+        return False, error
+    store["habits"].append({
+        "habit_id": make_id("habit"),
+        "title": clean_title,
+        "category": str(category or "").strip() or "Rutina",
+        "weekly_target": max(1, min(7, int(target or 5))),
+        "history": {},
+        "done_today": False,
+        "streak": 0,
+        "color": habit_color(len(store.get("habits", []))),
+        "created_at": now_iso(),
+    })
+    add_log(store, "Progress Monitor", "Hábito creado", {"habit": clean_title})
+    save_store(store)
+    return True, ""
 
 
 def render_habit_form(store):
@@ -2854,11 +3728,11 @@ def render_habit_form(store):
             title = c1.text_input("Hábito", placeholder="Repasar vocabulario, leer 20 min...")
             category = c2.text_input("Categoría", placeholder="Estudio")
             target = c3.number_input("Meta semanal", 1, 7, 5)
-            if st.form_submit_button("Crear hábito", use_container_width=True) and title:
-                store["habits"].append({"habit_id": make_id("habit"), "title": title.strip(), "category": category.strip() or "Rutina", "weekly_target": int(target), "history": {}, "done_today": False, "streak": 0, "color": habit_color(len(store.get("habits", []))), "created_at": now_iso()})
-                add_log(store, "Progress Monitor", "Hábito creado", {"habit": title.strip()})
-                save_store(store)
-                st.rerun()
+            if st.form_submit_button("Crear hábito", use_container_width=True):
+                saved, error = create_habit(store, title, category, target)
+                if saved:
+                    st.rerun()
+                st.error(error)
 
 
 def render_habit_week(store):
@@ -2882,7 +3756,9 @@ def render_habit_week(store):
         habit["color"] = color
         completed, target, progress = habit_week_progress(habit, days)
         row = st.columns([2.5] + [0.72] * 7 + [1.15])
-        row[0].markdown(f"""<div class="habit-row-card" style="border-left:5px solid {color}"><div class="habit-name">{html_lib.escape(str(habit.get('title', 'Hábito')))}</div><div class="habit-meta">{html_lib.escape(str(habit.get('category', 'Rutina')))} · meta {target}/semana · racha {habit_streak(habit)} días</div><span class="habit-chip">{completed}/{target} esta semana</span></div>""", unsafe_allow_html=True)
+        current_streak = habit_streak(habit)
+        best_streak = habit_best_streak(habit)
+        row[0].markdown(f"""<div class="habit-row-card" style="border-left:5px solid {color}"><div class="habit-name">{html_lib.escape(str(habit.get('title', 'Hábito')))}</div><div class="habit-meta">{html_lib.escape(str(habit.get('category', 'Rutina')))} · meta {target}/semana · 🔥 {current_streak} días · mejor {best_streak}</div><span class="habit-chip">{completed}/{target} esta semana</span></div>""", unsafe_allow_html=True)
         for day_col, day in zip(row[1:8], days):
             checked = day_col.checkbox(" ", value=is_habit_done(habit, day), key=f"habit_done_{habit['habit_id']}_{day.isoformat()}")
             if checked != is_habit_done(habit, day):
@@ -3071,7 +3947,7 @@ def tab_memory(store):
             st.session_state["memory_clear_summary"] = f"Se eliminó: {deleted_text}. Se conservó: {kept_text}."
             st.rerun()
     st.subheader("Bitacora de agentes")
-    st.dataframe(pd.DataFrame(store["agent_log"]), use_container_width=True, hide_index=True)
+    render_data_table(pd.DataFrame(visible_agent_logs(store)))
     st.download_button("Descargar memoria JSON", json.dumps(store, ensure_ascii=False, indent=2), file_name="academic_planning_memory.json")
 
 

@@ -6,7 +6,12 @@ from ui import calendar, dashboard, habits, memory, planner, progress
 from ui.shared import apply_css, completion_stats, load_store, save_store, sidebar_profile
 
 
-st.set_page_config(page_title="Academic Planning Crew", page_icon="APC", layout="wide")
+st.set_page_config(
+    page_title="Academic Planning Crew",
+    page_icon="APC",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 
 def render_header(store):
@@ -19,6 +24,7 @@ def render_header(store):
         "To-do para ejecución diaria y agentes para dividir actividades.</div>",
         unsafe_allow_html=True,
     )
+    st.caption("Personaliza el color en la barra lateral: Apariencia → Color base.")
     stats = completion_stats(store)
     columns = st.columns(4)
     columns[0].metric("Actividades", len(store["activities"]))
@@ -28,8 +34,9 @@ def render_header(store):
 
 
 def main():
-    apply_css()
     store = load_store()
+    st.session_state["_app_store"] = store
+    apply_css()
     sidebar_profile(store)
     render_header(store)
 

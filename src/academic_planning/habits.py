@@ -31,6 +31,29 @@ def habit_streak(habit, end_day=None):
     return streak
 
 
+def habit_best_streak(habit):
+    completed_days = []
+    for day, completed in habit_history(habit).items():
+        if not completed:
+            continue
+        try:
+            completed_days.append(date.fromisoformat(day))
+        except (TypeError, ValueError):
+            continue
+    completed_days.sort()
+    best = 0
+    running = 0
+    previous = None
+    for day in completed_days:
+        if previous and day == previous + timedelta(days=1):
+            running += 1
+        else:
+            running = 1
+        best = max(best, running)
+        previous = day
+    return best
+
+
 def habit_week_dates(selected=None):
     selected = selected or date.today()
     start = selected - timedelta(days=selected.weekday())

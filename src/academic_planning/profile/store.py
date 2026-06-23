@@ -10,6 +10,9 @@ def default_profile():
         "name": "",
         "email": "",
         "academic_level": "",
+        "primary_goal": "",
+        "favorite_theme": "Lila",
+        "main_weekly_goal": "",
         "timezone": "America/Guatemala",
         "study_preferences": "",
     }
@@ -49,6 +52,9 @@ def save_profile(store, profile):
     safe["name"] = str(safe["name"] or "").strip()
     safe["email"] = str(safe["email"] or "").strip()
     safe["academic_level"] = str(safe["academic_level"] or "").strip()
+    safe["primary_goal"] = str(safe["primary_goal"] or "").strip()
+    safe["favorite_theme"] = str(safe["favorite_theme"] or "").strip() or "Lila"
+    safe["main_weekly_goal"] = str(safe["main_weekly_goal"] or "").strip()
     safe["timezone"] = str(safe["timezone"] or "").strip() or "America/Guatemala"
     safe["study_preferences"] = str(safe["study_preferences"] or "").strip()
     store["profile"] = safe

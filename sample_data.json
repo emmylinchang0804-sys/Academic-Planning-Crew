@@ -1,0 +1,62 @@
+{
+  "student": {
+    "name": "Estudiante de ejemplo",
+    "career": "Ingeniería",
+    "semester": "Primer semestre",
+    "timezone": "America/Guatemala"
+  },
+  "profile": {
+    "name": "Estudiante de ejemplo",
+    "email": "",
+    "academic_level": "Ingeniería - Primer semestre",
+    "primary_goal": "Mantener un ritmo de estudio sostenible",
+    "favorite_theme": "Lila",
+    "main_weekly_goal": "Estudiar 10 horas",
+    "timezone": "America/Guatemala",
+    "study_preferences": "Sesiones breves por la tarde"
+  },
+  "courses": [
+    {
+      "course_id": "course_demo_math",
+      "name": "Matemática",
+      "color": "#c4b5fd"
+    }
+  ],
+  "availability": [
+    {
+      "availability_id": "av_demo_math",
+      "title": "Matemática",
+      "day_index": 0,
+      "day_of_week": "Lunes",
+      "start_time": "08:00",
+      "end_time": "09:20",
+      "availability_type": "Clase",
+      "color": "#c4b5fd"
+    }
+  ],
+  "activities": [],
+  "todo_items": [],
+  "events": [],
+  "habits": [],
+  "weekly_goals": [],
+  "chat": [],
+  "agent_log": [],
+  "settings": {
+    "app_theme": "Lila",
+    "display_mode": "Automático",
+    "dashboard_widgets": {
+      "tasks": true,
+      "habits": true,
+      "calendar": true,
+      "statistics": true,
+      "goals": true,
+      "recent_activity": true
+    },
+    "todo_sections": {
+      "overdue": true,
+      "today": true,
+      "week": true,
+      "done": true
+    }
+  }
+}
