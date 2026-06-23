@@ -1,11 +1,13 @@
-import calendar
+﻿import calendar
 import base64
 import html as html_lib
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import date, datetime, time, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import pandas as pd
@@ -115,10 +117,37 @@ def load_store():
     return store
 
 
+def short_todo_title(title):
+    clean = re.sub(r"\s+", " ", str(title or "Pendiente")).strip()
+    return clean[:47].rstrip(" .,-") + "..." if len(clean) > 50 else clean
+
+
+def normalize_todo_text(value):
+    text = str(value or "").lower()
+    text = re.sub(r"[^a-z0-9áéíóúñ]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def todo_similarity(left, right):
+    return SequenceMatcher(None, normalize_todo_text(left), normalize_todo_text(right)).ratio()
+
+
+def is_similar_todo(existing, candidate):
+    if existing.get("done"):
+        return False
+    same_date = existing.get("date") == candidate.get("date")
+    same_internal = existing.get("internal_task_id") and existing.get("internal_task_id") == candidate.get("internal_task_id")
+    similar_title = todo_similarity(existing.get("title"), candidate.get("title")) >= 0.86
+    return same_date and (same_internal or similar_title)
+
+
 def ensure_todo_defaults(item):
     item.setdefault("priority", "Media")
     item.setdefault("estimated_minutes", 30)
     item.setdefault("energy", "Normal")
+    item.setdefault("description", "")
+    item["title"] = short_todo_title(item.get("title", "Pendiente"))
+    item.setdefault("internal_task_id", make_id("task"))
     return item
 
 
@@ -1618,6 +1647,105 @@ def todo_meta_line(item):
     return " · ".join(str(piece) for piece in pieces if piece)
 
 
+def progress_completed(item):
+    if isinstance(item, dict):
+        return bool(item.get("completed") or item.get("done"))
+    return bool(getattr(item, "completed", False))
+
+
+def item_course(item):
+    course = str(item.get("course") or item.get("subject") or item.get("title") or "General").strip()
+    return course or "General"
+
+
+def academic_statistics(store):
+    today = date.today()
+    week_days = habit_week_dates(today)
+    week_start_day = week_days[0]
+    week_end_day = week_days[-1]
+    todos = store.get("todo_items", [])
+    events = store.get("events", [])
+    habits = store.get("habits", [])
+    progress_items = store.get("progress", [])
+
+    todo_total = len(todos)
+    todo_done = sum(1 for item in todos if item.get("done"))
+    todo_pending = todo_total - todo_done
+
+    habit_target = sum(max(1, int(habit.get("weekly_target", 5) or 5)) for habit in habits)
+    habit_done = sum(
+        min(habit_week_count(habit, week_days), max(1, int(habit.get("weekly_target", 5) or 5)))
+        for habit in habits
+    )
+    progress_total = len(progress_items)
+    progress_done = sum(1 for item in progress_items if progress_completed(item))
+    compliance_total = todo_total + habit_target + progress_total
+    compliance_done = todo_done + habit_done + progress_done
+    compliance_pct = round(compliance_done / compliance_total * 100, 1) if compliance_total else 0
+
+    course_load = {}
+    weekly_minutes = 0
+    for item in todos:
+        item_date = parse_date(item.get("date"))
+        course = item_course(item)
+        minutes_value = todo_minutes(item)
+        course_load.setdefault(course, {"Materia": course, "Pendientes": 0, "Completadas": 0, "Minutos": 0})
+        course_load[course]["Minutos"] += minutes_value
+        if item.get("done"):
+            course_load[course]["Completadas"] += 1
+        else:
+            course_load[course]["Pendientes"] += 1
+        if item_date and week_start_day <= item_date <= week_end_day:
+            weekly_minutes += minutes_value
+
+    for activity in store.get("activities", []):
+        course = str(activity.get("course") or "General").strip() or "General"
+        course_load.setdefault(course, {"Materia": course, "Pendientes": 0, "Completadas": 0, "Minutos": 0})
+        deadline = parse_date(activity.get("deadline"))
+        if deadline and week_start_day <= deadline <= week_end_day and not any(
+            item.get("activity_id") == activity.get("activity_id") for item in todos
+        ):
+            try:
+                weekly_minutes += int(float(activity.get("estimated_hours", 0) or 0) * 60)
+            except (TypeError, ValueError):
+                pass
+
+    upcoming = []
+    for item in todos:
+        item_date = parse_date(item.get("date"))
+        if item_date and item_date >= today and not item.get("done"):
+            upcoming.append({
+                "Fecha": item_date.isoformat(),
+                "Tipo": "Pendiente",
+                "Titulo": item.get("title", "Pendiente"),
+                "Materia": item.get("course", "General"),
+            })
+    for event in events:
+        event_date = parse_date(event.get("date"))
+        if event_date and event_date >= today:
+            upcoming.append({
+                "Fecha": event_date.isoformat(),
+                "Tipo": event.get("type", "Evento"),
+                "Titulo": event.get("title", "Evento"),
+                "Materia": event.get("course", "General"),
+            })
+    upcoming = sorted(upcoming, key=lambda item: item["Fecha"])[:10]
+
+    return {
+        "todo_total": todo_total,
+        "todo_done": todo_done,
+        "todo_pending": todo_pending,
+        "compliance_pct": compliance_pct,
+        "course_load": sorted(course_load.values(), key=lambda item: item["Minutos"], reverse=True),
+        "upcoming": upcoming,
+        "weekly_hours": round(weekly_minutes / 60, 1),
+        "habit_done": habit_done,
+        "habit_target": habit_target,
+        "progress_done": progress_done,
+        "progress_total": progress_total,
+    }
+
+
 def next_upcoming_event(store, today):
     events = []
     for event in store.get("events", []):
@@ -1781,12 +1909,13 @@ def tab_today(store):
         st.subheader("Pendientes")
         if not filtered_todos:
             st.info("Sin pendientes con esos filtros.")
-        for item in filtered_todos:
+        for index, item in enumerate(filtered_todos):
+            widget_id = f"{item.get('todo_id') or 'todo'}_{index}"
             t0, t1 = st.columns([0.14, 1])
             checked = t0.checkbox(
                 "Hecho",
                 value=bool(item.get("done")),
-                key=f"today_done_{item.get('todo_id')}",
+                key=f"today_done_{widget_id}",
                 label_visibility="collapsed",
             )
             if checked != bool(item.get("done")):
@@ -2253,8 +2382,12 @@ def render_todo_card(store, item, key_prefix):
         key=f"{key_prefix}_done_{item.get('todo_id')}",
         label_visibility="collapsed",
     )
+    description_html = ""
+    if item.get("description"):
+        description_html = f"<div class='todo-card-meta'>{html_lib.escape(item.get('description', ''))}</div>"
     c1.markdown(
         f"<div style='font-weight:850;color:#101828;overflow-wrap:anywhere;{title_class}'>{html_lib.escape(item.get('title', 'Pendiente'))}</div>"
+        f"{description_html}"
         f"<div class='todo-card-meta'>{html_lib.escape(todo_meta_line(item))}</div>",
         unsafe_allow_html=True,
     )
@@ -2272,6 +2405,7 @@ def render_todo_card(store, item, key_prefix):
         e1, e2 = st.columns([2.2, 0.9])
         title = e1.text_input("Actividad", value=item.get("title", ""), key=f"{key_prefix}_title_{item.get('todo_id')}")
         new_date = e2.date_input("Fecha", value=parse_date(item.get("date")) or date.today(), key=f"{key_prefix}_date_{item.get('todo_id')}")
+        description = st.text_area("Descripción", value=item.get("description", ""), key=f"{key_prefix}_description_{item.get('todo_id')}")
 
         m1, m2, m3 = st.columns([1, 1, 1])
         priority = m1.selectbox(
@@ -2308,9 +2442,11 @@ def render_todo_card(store, item, key_prefix):
             or priority != item.get("priority")
             or energy != item.get("energy")
             or int(estimated) != todo_minutes(item)
+            or description != item.get("description", "")
         )
         if changed:
-            item["title"] = title
+            item["title"] = short_todo_title(title)
+            item["description"] = description.strip()
             item["date"] = new_date.isoformat()
             item["priority"] = priority
             item["energy"] = energy
@@ -2351,21 +2487,28 @@ def tab_todo(store):
         if st.form_submit_button("Agregar pendiente", use_container_width=True) and title:
             target_date = days[DAYS_ES.index(selected_day)]
             course_id = ensure_course(store, course)
-            store["todo_items"].append({
+            manual_item = {
                 "todo_id": make_id("todo"),
-                "title": title,
+                "title": short_todo_title(title),
+                "description": "",
                 "date": target_date.isoformat(),
                 "course": course,
                 "color": course_color(store, course_id),
                 "done": False,
                 "order": len(store["todo_items"]),
                 "activity_id": "",
+                "internal_task_id": make_id("task"),
                 "priority": priority,
                 "estimated_minutes": int(estimated),
                 "energy": energy,
-            })
-            save_store(store)
-            st.rerun()
+            }
+            ensure_todo_defaults(manual_item)
+            if any(is_similar_todo(existing, manual_item) for existing in store.get("todo_items", [])):
+                st.warning("Ya existe un pendiente muy similar para esa fecha.")
+            else:
+                store["todo_items"].append(manual_item)
+                save_store(store)
+                st.rerun()
 
     overdue_items = overdue_todos(store)
     if overdue_items:
@@ -2400,37 +2543,52 @@ def tab_todo(store):
         if not items:
             st.caption("Sin pendientes en esta sección.")
             continue
-        for item in items:
-            render_todo_card(store, item, key)
+        for index, item in enumerate(items):
+            render_todo_card(store, item, f"{key}_{index}")
 
 def save_agent_plan(store, result):
     activity = result["activity"]
     course_id = ensure_course(store, activity.get("course", "General"))
     activity["course_id"] = course_id
     activity["activity_id"] = make_id("act")
-    store["activities"].append(activity)
     color = course_color(store, course_id)
-    for item in result.get("todo_items", []):
+    saved_count = 0
+    skipped_count = 0
+    for index, raw_item in enumerate(result.get("todo_items", [])):
+        item = dict(raw_item)
         item["todo_id"] = make_id("todo")
         item["activity_id"] = activity["activity_id"]
         item["course"] = course_name(store, course_id)
         item["color"] = color
         item.setdefault("done", False)
         item.setdefault("order", len(store["todo_items"]))
+        item.setdefault("internal_task_id", f"{activity['activity_id']}_{index + 1:03d}")
+        item.setdefault("description", "")
         ensure_todo_defaults(item)
+        if any(is_similar_todo(existing, item) for existing in store.get("todo_items", [])):
+            skipped_count += 1
+            continue
         store["todo_items"].append(item)
-    if activity.get("deadline"):
+        saved_count += 1
+    if saved_count:
+        store["activities"].append(activity)
+    if activity.get("deadline") and saved_count:
+        event_id = make_id("event")
+        activity.setdefault("event_ids", []).append(event_id)
         store["events"].append({
-            "event_id": make_id("event"),
+            "event_id": event_id,
             "title": activity.get("title", "Entrega"),
             "date": activity["deadline"],
             "icon": chr(0x1F4CC),
             "type": "Entrega",
             "color": color,
+            "activity_id": activity["activity_id"],
         })
-    response = result.get("summary", f"Actividad dividida en {len(result.get('todo_items', []))} pendientes.")
+    response = result.get("summary", f"Actividad dividida en {saved_count} pendientes.")
+    if skipped_count:
+        response = f"{response} Omití {skipped_count} pendiente(s) repetido(s)."
     store["chat"].append({"role": "assistant", "content": response, "time": now_iso()})
-    add_log(store, "Academic Planning Crew", "Plan confirmado y guardado", {"items": len(result.get("todo_items", []))})
+    add_log(store, "Academic Planning Crew", "Plan confirmado y guardado", {"items": saved_count, "duplicates_skipped": skipped_count})
     save_store(store)
 
 
@@ -2462,7 +2620,7 @@ def tab_chat(store):
     if pending:
         activity = pending.get("activity", {})
         with st.container(border=True):
-            st.subheader("Propuesta del agente")
+            st.subheader("Propuesta de plan")
             st.write(f"**Actividad:** {activity.get('title', 'Actividad')}")
             st.write(f"**Tipo:** {activity.get('activity_type', '')} · **Entrega:** {activity.get('deadline', '')} · **Prioridad:** {activity.get('priority', '')}")
             todo_preview = pending.get("todo_items", [])
@@ -2490,6 +2648,9 @@ def tab_chat(store):
         context = {
             "profile": store.get("student", {}),
             "availability": store.get("availability", []),
+            "settings": store.get("settings", {}),
+            "habits": store.get("habits", []),
+            "events": store.get("events", []),
             "recent_chat": store.get("chat", [])[-12:],
             "activities": store.get("activities", []),
             "todo_items": store.get("todo_items", []),
@@ -2503,10 +2664,115 @@ def tab_chat(store):
             save_store(store)
             st.rerun()
         st.session_state["pending_agent_plan"] = result
-        response = "Preparé una propuesta. Revísala y confirma si quieres guardarla."
+        response = result.get("summary") or "Preparé una propuesta clara. Revísala y confirma si quieres guardarla."
         store["chat"].append({"role": "assistant", "content": response, "time": now_iso()})
         save_store(store)
         st.rerun()
+
+def associated_event_filter(activity):
+    activity_id = activity.get("activity_id")
+    event_ids = set(activity.get("event_ids", []) or [])
+
+    def is_associated(event):
+        return bool(
+            (activity_id and event.get("activity_id") == activity_id)
+            or (event.get("event_id") in event_ids)
+        )
+
+    return is_associated
+
+
+def delete_activity_bundle(store, activity, delete_activity=True, delete_todos=True, delete_events=False):
+    activity_id = activity.get("activity_id")
+    event_filter = associated_event_filter(activity)
+    associated_events = [event for event in store.get("events", []) if event_filter(event)]
+    deleted_activity = False
+    deleted_progress = 0
+    deleted_todos = 0
+    deleted_events = 0
+
+    if delete_activity:
+        before_activities = len(store.get("activities", []))
+        if activity_id:
+            store["activities"] = [item for item in store.get("activities", []) if item.get("activity_id") != activity_id]
+        else:
+            store["activities"] = [item for item in store.get("activities", []) if item is not activity]
+        deleted_activity = len(store.get("activities", [])) < before_activities
+
+        if activity_id and isinstance(store.get("progress"), list):
+            before_progress = len(store.get("progress", []))
+            store["progress"] = [item for item in store.get("progress", []) if item.get("activity_id") != activity_id]
+            deleted_progress = before_progress - len(store.get("progress", []))
+
+    if delete_todos and activity_id:
+        before_todos = len(store.get("todo_items", []))
+        store["todo_items"] = [item for item in store.get("todo_items", []) if item.get("activity_id") != activity_id]
+        deleted_todos = before_todos - len(store.get("todo_items", []))
+
+    if delete_events:
+        before_events = len(store.get("events", []))
+        store["events"] = [event for event in store.get("events", []) if not event_filter(event)]
+        deleted_events = before_events - len(store.get("events", []))
+
+    kept_events = max(0, len(associated_events) - deleted_events)
+    add_log(store, "Progress Monitor", "Eliminacion selectiva de actividad", {
+        "activity_id": activity_id,
+        "activity_deleted": deleted_activity,
+        "progress_deleted": deleted_progress,
+        "todos_deleted": deleted_todos,
+        "events_deleted": deleted_events,
+        "events_kept": kept_events,
+        "delete_activity": delete_activity,
+        "delete_todos": delete_todos,
+        "delete_events": delete_events,
+    })
+    save_store(store)
+    return {
+        "activity_deleted": deleted_activity,
+        "progress_deleted": deleted_progress,
+        "todos_deleted": deleted_todos,
+        "events_deleted": deleted_events,
+        "events_kept": kept_events,
+    }
+
+
+def tab_statistics(store):
+    st.markdown('<div class="section-title">Estadisticas academicas</div>', unsafe_allow_html=True)
+    stats = academic_statistics(store)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Completadas", stats["todo_done"])
+    c2.metric("Pendientes", stats["todo_pending"])
+    c3.metric("Cumplimiento", f"{stats['compliance_pct']}%")
+    c4.metric("Proximas", len(stats["upcoming"]))
+    c5.metric("Estudio semanal", f"{stats['weekly_hours']} h")
+    st.progress(int(min(100, stats["compliance_pct"])))
+
+    left, right = st.columns([1.2, 1])
+    with left:
+        st.subheader("Carga por materia")
+        if stats["course_load"]:
+            load_df = pd.DataFrame(stats["course_load"])
+            chart_df = load_df.set_index("Materia")[["Minutos"]].rename(columns={"Minutos": "Minutos estimados"})
+            st.bar_chart(chart_df, use_container_width=True)
+            st.dataframe(load_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Todavia no hay pendientes con materia para calcular carga.")
+
+    with right:
+        st.subheader("Actividades proximas")
+        if stats["upcoming"]:
+            st.dataframe(pd.DataFrame(stats["upcoming"]), use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay pendientes ni eventos proximos registrados.")
+
+        st.subheader("Base del cumplimiento")
+        summary = pd.DataFrame([
+            {"Fuente": "Tareas", "Completado": stats["todo_done"], "Total": stats["todo_total"]},
+            {"Fuente": "Habitos semanales", "Completado": stats["habit_done"], "Total": stats["habit_target"]},
+            {"Fuente": "Progress", "Completado": stats["progress_done"], "Total": stats["progress_total"]},
+        ])
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+
 
 def tab_progress(store):
     st.markdown('<div class="section-title">Progreso</div>', unsafe_allow_html=True)
@@ -2517,13 +2783,55 @@ def tab_progress(store):
     c3.metric("Pendientes", stats["pending"])
     c4.metric("Atrasados", stats["overdue"])
     st.progress(int(stats["pct"]))
-    if store["activities"]:
-        rows = []
-        for activity in store["activities"]:
-            todos = [t for t in store["todo_items"] if t.get("activity_id") == activity.get("activity_id")]
-            done = sum(1 for t in todos if t.get("done"))
-            rows.append({"actividad": activity.get("title"), "tipo": activity.get("activity_type"), "entrega": activity.get("deadline"), "avance": f"{done}/{len(todos)}"})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    delete_summary = st.session_state.pop("progress_delete_summary", None)
+    if delete_summary:
+        st.success(delete_summary)
+    if not store["activities"]:
+        st.info("Todavía no hay actividades guardadas.")
+        return
+    for index, activity in enumerate(list(store["activities"])):
+        activity_id = activity.get("activity_id")
+        todos = [t for t in store.get("todo_items", []) if activity_id and t.get("activity_id") == activity_id]
+        event_ids = set(activity.get("event_ids", []) or [])
+        event_filter = associated_event_filter(activity)
+        events = [
+            e for e in store.get("events", [])
+            if event_filter(e)
+        ]
+        done = sum(1 for t in todos if t.get("done"))
+        with st.container(border=True):
+            cols = st.columns([2.4, 1, 1, 1.1])
+            cols[0].markdown(f"**{activity.get('title', 'Actividad')}**")
+            cols[0].caption(f"{activity.get('activity_type', 'Actividad')} · Entrega: {activity.get('deadline', 'Sin fecha')}")
+            cols[1].metric("Avance", f"{done}/{len(todos)}")
+            cols[2].metric("Eventos", len(events))
+            delete_key = f"delete_activity_{activity_id or index}"
+            delete_activity_key = f"delete_activity_progress_{activity_id or index}"
+            delete_todos_key = f"delete_activity_todos_{activity_id or index}"
+            delete_events_key = f"delete_activity_events_{activity_id or index}"
+            if not activity_id:
+                st.warning("Esta actividad es antigua y no tiene activity_id. Se puede eliminar la actividad, pero no se borrarán pendientes por título.")
+            options = st.columns([1, 1, 1])
+            delete_activity_opt = options[0].checkbox("Eliminar actividad/progreso", value=True, key=delete_activity_key)
+            delete_todos_opt = options[1].checkbox("Eliminar pendientes asociados", value=True, key=delete_todos_key)
+            delete_events_opt = options[2].checkbox("Eliminar eventos del calendario", value=False, key=delete_events_key)
+            has_selection = delete_activity_opt or delete_todos_opt or delete_events_opt
+            if cols[3].button("Aplicar eliminacion", key=delete_key, use_container_width=True, disabled=not has_selection):
+                result = delete_activity_bundle(
+                    store,
+                    activity,
+                    delete_activity=delete_activity_opt,
+                    delete_todos=delete_todos_opt,
+                    delete_events=delete_events_opt,
+                )
+                activity_message = "Se eliminó la actividad." if result["activity_deleted"] else "No se eliminó la actividad."
+                progress_note = f" Se eliminaron {result['progress_deleted']} registros de progreso." if result["progress_deleted"] else ""
+                st.session_state["progress_delete_summary"] = (
+                    f"{activity_message}{progress_note} "
+                    f"Se eliminaron {result['todos_deleted']} pendientes. "
+                    f"Se conservaron {result['events_kept']} eventos."
+                )
+                st.rerun()
 
 
 def render_habit_stats(store, days):
@@ -2641,16 +2949,106 @@ def tab_habits(store):
     with calendar_tab: render_habit_calendar(store)
 
 
+def clear_selected_memory(store, options):
+    create_backup(store, "before_selective_memory_clear")
+    before = {
+        "activities": len(store.get("activities", [])),
+        "progress": len(store.get("progress", [])) if isinstance(store.get("progress"), list) else 0,
+        "todo_items": len(store.get("todo_items", [])),
+        "events": len(store.get("events", [])),
+        "habits": len(store.get("habits", [])),
+        "chat": len(store.get("chat", [])),
+        "agent_log": len(store.get("agent_log", [])),
+        "availability": len(store.get("availability", [])),
+        "schedule": len(store.get("schedule", [])) if isinstance(store.get("schedule"), list) else 0,
+        "classes": len(store.get("classes", [])) if isinstance(store.get("classes"), list) else 0,
+        "timetable": len(store.get("timetable", [])) if isinstance(store.get("timetable"), list) else 0,
+    }
+
+    deleted = []
+    kept = []
+    if options.get("activities"):
+        store["activities"] = []
+        if isinstance(store.get("progress"), list):
+            store["progress"] = []
+        deleted.append(f"actividades/progreso ({before['activities']} actividades, {before['progress']} registros)")
+    else:
+        kept.append("actividades/progreso")
+
+    if options.get("todos"):
+        store["todo_items"] = []
+        deleted.append(f"pendientes ({before['todo_items']})")
+    else:
+        kept.append("pendientes")
+
+    if options.get("events"):
+        store["events"] = []
+        deleted.append(f"eventos ({before['events']})")
+    else:
+        kept.append("eventos")
+
+    if options.get("habits"):
+        store["habits"] = []
+        deleted.append(f"hábitos ({before['habits']})")
+    else:
+        kept.append("hábitos")
+
+    if options.get("logs"):
+        store["chat"] = []
+        store["agent_log"] = []
+        deleted.append(f"logs/chat ({before['agent_log']} logs, {before['chat']} chats)")
+    else:
+        kept.append("logs/chat")
+
+    if options.get("schedule"):
+        store["availability"] = []
+        for key in ("schedule", "classes", "timetable"):
+            if key in store:
+                store[key] = []
+        deleted.append(
+            f"horario/clases ({before['availability']} bloques, "
+            f"{before['schedule']} schedule, {before['classes']} classes, {before['timetable']} timetable)"
+        )
+    else:
+        kept.append("horario/clases y datos de horario")
+
+    if not options.get("logs"):
+        add_log(store, "Memory", "Eliminación selectiva de datos", {"deleted": deleted, "kept": kept})
+    save_store(store)
+    return deleted, kept
+
+
 def tab_memory(store):
     st.markdown('<div class="section-title">Memoria y estructura</div>', unsafe_allow_html=True)
     st.caption("La logica de agentes vive en `src/academic_planning`: crew, config, tools, memory, models y workflows.")
-    with st.expander("Reiniciar todo", expanded=False):
-        st.warning("Esto borra horarios, eventos, actividades, to-dos, chat y bitácora.")
-        keep_profile = st.checkbox("Conservar perfil", value=True, key="memory_keep_profile")
-        confirm = st.checkbox("Confirmo que quiero reiniciar la app", key="memory_confirm_reset")
-        if st.button("Reiniciar memoria completa", use_container_width=True, disabled=not confirm):
-            reset_store(keep_profile=keep_profile)
-            st.success("Memoria reiniciada.")
+    memory_summary = st.session_state.pop("memory_clear_summary", None)
+    if memory_summary:
+        st.success(memory_summary)
+    with st.expander("Eliminar datos", expanded=False):
+        st.warning("Esta acción borra solo las secciones seleccionadas y crea un respaldo antes de aplicar cambios.")
+        col_a, col_b = st.columns(2)
+        delete_activities = col_a.checkbox("Eliminar actividades/progreso", value=False, key="memory_delete_activities")
+        delete_todos = col_a.checkbox("Eliminar pendientes", value=False, key="memory_delete_todos")
+        delete_events = col_a.checkbox("Eliminar eventos", value=False, key="memory_delete_events")
+        delete_habits = col_b.checkbox("Eliminar hábitos", value=False, key="memory_delete_habits")
+        delete_logs = col_b.checkbox("Eliminar logs/chat", value=False, key="memory_delete_logs")
+        delete_schedule = col_b.checkbox("Eliminar horario/clases", value=False, key="memory_delete_schedule")
+        if not delete_schedule:
+            st.info("El horario se conservará: bloques de horario, clases y datos usados por la vista semanal.")
+        selected = any([delete_activities, delete_todos, delete_events, delete_habits, delete_logs, delete_schedule])
+        confirm = st.checkbox("Confirmo que quiero eliminar las secciones seleccionadas", key="memory_confirm_selective_delete")
+        if st.button("Eliminar datos seleccionados", use_container_width=True, disabled=not selected or not confirm):
+            deleted, kept = clear_selected_memory(store, {
+                "activities": delete_activities,
+                "todos": delete_todos,
+                "events": delete_events,
+                "habits": delete_habits,
+                "logs": delete_logs,
+                "schedule": delete_schedule,
+            })
+            deleted_text = ", ".join(deleted) if deleted else "nada"
+            kept_text = ", ".join(kept) if kept else "nada"
+            st.session_state["memory_clear_summary"] = f"Se eliminó: {deleted_text}. Se conservó: {kept_text}."
             st.rerun()
     st.subheader("Bitacora de agentes")
     st.dataframe(pd.DataFrame(store["agent_log"]), use_container_width=True, hide_index=True)
@@ -2669,7 +3067,7 @@ def main():
     top[1].metric("To-dos", stats["total"])
     top[2].metric("Completado", f"{stats['pct']}%")
     top[3].metric("Atrasados", stats["overdue"])
-    tabs = st.tabs(["Hoy", "Semana", "Mes", "To-do", "Chat / Agentes", "Progreso", "Hábitos", "Memoria"])
+    tabs = st.tabs(["Hoy", "Semana", "Mes", "To-do", "Chat / Agentes", "Estadisticas", "Progreso", "Habitos", "Memoria"])
     with tabs[0]:
         tab_today(store)
     with tabs[1]:
@@ -2681,16 +3079,16 @@ def main():
     with tabs[4]:
         tab_chat(store)
     with tabs[5]:
-        tab_progress(store)
+        tab_statistics(store)
     with tabs[6]:
-        tab_habits(store)
+        tab_progress(store)
     with tabs[7]:
+        tab_habits(store)
+    with tabs[8]:
         tab_memory(store)
     save_store(store)
 
 
 if __name__ == "__main__":
     main()
-
-
 

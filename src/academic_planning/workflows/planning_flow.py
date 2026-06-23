@@ -145,17 +145,34 @@ def distribute_ranges(total, days):
     return ranges
 
 
+def short_task_title(title):
+    clean = re.sub(r"\s+", " ", str(title or "Pendiente")).strip()
+    return clean[:47].rstrip(" .,-") + "..." if len(clean) > 50 else clean
+
+
 def reading_plan(activity_id, title, total, unit, days):
-    label = "paginas" if unit == "pages" else "capitulos"
+    label = "páginas" if unit == "pages" else "capítulos"
     items = []
     for order, (day, start, end, amount) in enumerate(distribute_ranges(total, days)):
-        item_title = f"Leer {label} {start}-{end}: {title}"
+        item_title = short_task_title(f"Leer {label} {start}-{end}")
         items.append({
             "title": item_title,
+            "description": f"Lectura de {title}. Avanzar {amount} {label}.",
             "date": day.isoformat(),
             "done": False,
             "order": order,
+            "internal_task_id": f"reading_{order + 1:03d}",
             "meta": {"kind": "reading", "unit": unit, "page_start": start, "page_end": end, "target_amount": amount},
+        })
+    if len(days) > 1:
+        items.append({
+            "title": "Repaso de lectura",
+            "description": f"Repasar notas e ideas principales de {title}.",
+            "date": days[-1].isoformat(),
+            "done": False,
+            "order": len(items),
+            "internal_task_id": f"reading_review_{len(items) + 1:03d}",
+            "meta": {"kind": "reading_review", "unit": unit},
         })
     return items
 
@@ -173,10 +190,12 @@ def redistribute_reading_plan(activity_id, title, start_page, total_pages, start
         items.append({
             "todo_id": f"todo_replan_{activity_id}_{order}",
             "activity_id": activity_id,
-            "title": f"Leer paginas {cursor}-{end}: {title}",
+            "title": short_task_title(f"Leer páginas {cursor}-{end}"),
+            "description": f"Lectura de {title}. Avanzar {amount} páginas.",
             "date": day.isoformat(),
             "done": False,
             "order": order,
+            "internal_task_id": f"reading_replan_{order + 1:03d}",
             "meta": {"kind": "reading", "unit": "pages", "page_start": cursor, "page_end": end, "target_amount": amount},
         })
         cursor = end + 1
@@ -185,17 +204,27 @@ def redistribute_reading_plan(activity_id, title, start_page, total_pages, start
 
 def phase_plan(title, activity_type, days):
     if activity_type == "Ensayo":
-        phases = ["Definir tema y tesis", "Investigar fuentes", "Bosquejo", "Redactar desarrollo", "Redactar introduccion y conclusion", "Revision final"]
+        phases = ["Investigación", "Primer borrador", "Revisión final"]
+    elif activity_type == "Proyecto":
+        phases = ["Investigación", "Primer borrador", "Revisión final"]
     elif activity_type == "Laboratorio":
-        phases = ["Parte 1", "Parte 2", "Parte 3", "Analisis de resultados", "Revision final"]
+        phases = ["Preparar práctica", "Análisis de resultados", "Revisión final"]
     elif activity_type == "Examen":
-        phases = ["Repasar temas principales", "Practicar ejercicios", "Resolver dudas", "Simulacro", "Repaso final"]
+        phases = ["Estudiar tema 1", "Estudiar tema 2", "Repaso final"]
     else:
-        phases = ["Parte 1", "Parte 2", "Parte 3", "Revision final"]
+        phases = ["Parte 1", "Parte 2", "Revisión final"]
     items = []
     for index, phase in enumerate(phases):
         day = days[min(index, len(days) - 1)]
-        items.append({"title": f"{phase}: {title}", "date": day.isoformat(), "done": False, "order": index, "meta": {"kind": "phase", "phase": phase}})
+        items.append({
+            "title": short_task_title(phase),
+            "description": f"{phase} para {title}.",
+            "date": day.isoformat(),
+            "done": False,
+            "order": index,
+            "internal_task_id": f"phase_{index + 1:03d}",
+            "meta": {"kind": "phase", "phase": phase},
+        })
     return items
 
 
@@ -208,21 +237,21 @@ def fallback_plan(message, today=None, context=None):
     if not deadline:
         return {
             "needs_clarification": True,
-            "question": "¿Para que fecha necesitas tener lista esta actividad?",
+            "question": "¿Para qué fecha necesitas tener lista esta actividad?",
             "agent_log": [{"agent": "Task Analyzer", "action": "Falta fecha limite", "payload": {"message": message}}],
         }
     days = prioritized_future_dates(today, deadline, context)
     if not days:
         return {
             "needs_clarification": True,
-            "question": "La fecha ya paso. ¿Para que nueva fecha quieres replanificarla?",
+            "question": "La fecha ya pasó. ¿Para qué nueva fecha quieres replanificarla?",
             "agent_log": [{"agent": "Academic Planner", "action": "Fecha pasada detectada", "payload": {"deadline": deadline.isoformat()}}],
         }
     unit, total = page_or_chapter_count(message)
     if activity_type == "Lectura" and not total:
         return {
             "needs_clarification": True,
-            "question": "¿Cuantas paginas o capitulos tienes que leer?",
+            "question": "¿Cuántas páginas o capítulos tienes que leer?",
             "agent_log": [{"agent": "Task Analyzer", "action": "Falta cantidad de lectura", "payload": {}}],
         }
     if activity_type == "Lectura":
@@ -246,13 +275,85 @@ def fallback_plan(message, today=None, context=None):
         "needs_clarification": False,
         "activity": activity,
         "todo_items": todo_items,
-        "summary": f"Dividi {title} en {len(todo_items)} pendientes hasta {deadline.strftime('%d/%m/%Y')}.",
+        "summary": f"Organicé la actividad en {len(todo_items)} pasos hasta el {deadline.strftime('%d/%m/%Y')}. Revisa el cronograma y confirma si quieres guardarlo.",
         "agent_log": [
             {"agent": "Academic Coordinator", "action": "Solicitud clasificada", "payload": {"type": activity_type}},
             {"agent": "Task Analyzer", "action": "Actividad analizada", "payload": {"estimated_hours": estimated_hours}},
             {"agent": "Academic Planner", "action": "To-do semanal generado", "payload": {"items": len(todo_items)}},
         ],
     }
+
+
+def analyze_activity_payload(message, today=None):
+    """Return the deterministic analysis that CrewAI can reuse as a tool."""
+    today = today or date.today()
+    deadline = parse_date_from_text(message, today)
+    activity_type = infer_type(message)
+    unit, total = page_or_chapter_count(message)
+    missing = []
+    if not deadline:
+        missing.append("deadline")
+    if activity_type == "Lectura" and not total:
+        missing.append("reading_amount")
+    estimated_hours = None
+    if activity_type == "Lectura" and total:
+        estimated_hours = round(total / 35, 1) if unit == "pages" else round(total * 0.75, 1)
+    elif activity_type != "Lectura":
+        estimated_hours = {"Ensayo": 6, "Proyecto": 8, "Laboratorio": 4, "Examen": 5}.get(activity_type, 2)
+    return {
+        "title": clean_title(message),
+        "activity_type": activity_type,
+        "deadline": deadline.isoformat() if deadline else None,
+        "estimated_hours": estimated_hours,
+        "priority": "Alta" if deadline and (deadline - today).days <= 3 else "Media",
+        "reading_unit": unit,
+        "reading_total": total,
+        "missing_information": missing,
+    }
+
+
+def student_profile_payload(context=None, today=None):
+    """Summarize availability and habits for the Student Profile Manager agent."""
+    today = today or date.today()
+    context = context or {}
+    next_days = []
+    for offset in range(7):
+        day = today + timedelta(days=offset)
+        next_days.append({
+            "date": day.isoformat(),
+            "weekday": day.weekday(),
+            "free_minutes": free_minutes_between_classes(day, context),
+            "workload_score": round(workload_score(day, context), 2),
+        })
+    return {
+        "profile": context.get("profile", {}),
+        "settings": context.get("settings", {}),
+        "habit_count": len(context.get("habits", [])),
+        "availability_blocks": len(context.get("availability", [])),
+        "open_todos": sum(1 for item in context.get("todo_items", []) if not item.get("done")),
+        "next_7_days": next_days,
+    }
+
+
+def progress_payload(context=None, today=None):
+    """Summarize current progress so CrewAI can decide if a replan is needed."""
+    today = today or date.today()
+    context = context or {}
+    todos = context.get("todo_items", [])
+    done = sum(1 for item in todos if item.get("done"))
+    overdue = sum(1 for item in todos if not item.get("done") and item.get("date", "") < today.isoformat())
+    return {
+        "total_todos": len(todos),
+        "completed_todos": done,
+        "pending_todos": len(todos) - done,
+        "overdue_todos": overdue,
+        "completion_percent": round((done / len(todos)) * 100, 1) if todos else 0,
+    }
+
+
+def build_plan_payload(message, context=None, today=None):
+    """Expose the current planning logic as a reusable CrewAI tool."""
+    return fallback_plan(message, today or date.today(), context or {})
 
 
 def llm_plan(message, context, today):
@@ -268,8 +369,8 @@ def llm_plan(message, context, today):
             "context": context,
             "instructions": (
                 "Actua como Academic Planning Crew con Academic Coordinator, Task Analyzer, Academic Planner y Progress Monitor. "
-                "Devuelve JSON estricto. Si falta fecha, cantidad, paginas/capitulos o duración necesaria, pide aclaracion. "
-                "No planifiques en fechas pasadas. Para lecturas divide paginas/capitulos entre dias restantes. "
+                "Devuelve JSON estricto. Si falta fecha, cantidad, páginas/capítulos o duración necesaria, pide aclaración. "
+                "No planifiques en fechas pasadas. Para lecturas divide páginas/capítulos entre días restantes. "
                 "Usa availability, todo_items y settings para preferir días con más minutos libres, menos clases y menos pendientes. "
                 "Para ensayos divide en tema/tesis, investigacion, bosquejo, desarrollo, conclusion y revisión. "
                 "Para laboratorios divide en partes y revisión."

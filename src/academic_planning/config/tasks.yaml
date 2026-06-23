@@ -1,20 +1,35 @@
 classify_student_request:
+  order: 1
   agent: academic_coordinator
-  expected_output: "request_type, workflow, required_agents"
+  description: "Lee el mensaje del usuario: {message}. Fecha actual: {today}. Clasifica internamente si es tarea, lectura, examen, ensayo, laboratorio, proyecto o seguimiento. No escribas una respuesta al usuario todavia y no menciones nombres de agentes."
+  expected_output: "Clasificacion interna breve: request_type, workflow y datos importantes."
 
 analyze_academic_activity:
+  order: 2
   agent: task_analyzer
-  expected_output: "activity_type, deadline, estimated_hours, complexity, priority, missing_information"
+  description: "Usa la herramienta analizar_actividad_academica. Detecta tipo, titulo, fecha limite, prioridad, carga estimada y datos faltantes del mensaje: {message}. Mantén la salida como datos internos, no como informe."
+  expected_output: "JSON interno con activity_type, title, deadline, estimated_hours, priority y missing_information."
 
-decompose_activity:
-  agent: task_analyzer
-  expected_output: "subtasks/todo_items with dates, page ranges or project phases"
+review_student_profile:
+  order: 3
+  agent: student_profile_manager
+  description: "Usa la herramienta revisar_perfil_estudiante. Revisa disponibilidad, habitos, preferencias, pendientes abiertos y carga de los proximos 7 dias. Contexto: {context_json}. Resume solo restricciones utiles para planificar."
+  expected_output: "Resumen interno de disponibilidad, restricciones y dias recomendados."
 
 build_weekly_todo_plan:
+  order: 4
   agent: academic_planner
-  expected_output: "todo_items distributed only on today/future dates"
+  description: "Usa crear_plan_local y revisar_perfil_estudiante para crear un plan. Respeta fechas futuras, disponibilidad y carga existente. Si falta informacion, pide solo el dato necesario. El plan debe tener pendientes claros con fecha y accion concreta."
+  expected_output: "JSON compatible con Streamlit: needs_clarification, question opcional, activity, todo_items y summary."
 
 monitor_progress:
+  order: 5
   agent: progress_monitor
-  expected_output: "completion, remaining work, replanning recommendation"
+  description: "Usa revisar_progreso_actual. Revisa pendientes completados, atrasados y abiertos. Convierte el estado en una recomendacion breve y practica para el estudiante, sin mencionar monitoreo interno."
+  expected_output: "Recomendacion interna breve basada en completion_percent, pending_todos y overdue_todos."
 
+coordinate_final_response:
+  order: 6
+  agent: academic_coordinator
+  description: "Construye la salida final para Streamlit usando un unico JSON valido. La respuesta visible debe estar centrada en el estudiante: resumen breve, plan propuesto, fechas, tiempo estimado y recomendacion. Nunca menciones nombres de agentes, roles internos, coordinador, docente, estudiante como tercero, razonamiento interno ni frases tipo informe tecnico. Si hay todo_items, el campo summary debe explicar el plan en lenguaje natural y mencionar que abajo queda el cronograma. Si falta informacion, question debe ser una pregunta corta y directa. Conserva agent_log solo para debugging interno."
+  expected_output: "Solo JSON valido con este esquema: needs_clarification, question, activity, todo_items, summary, agent_log. summary y question deben ser texto natural para el usuario, sin markdown y sin nombres de agentes."
