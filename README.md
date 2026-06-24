@@ -4,6 +4,14 @@ Aplicación local en Streamlit para organizar clases, pendientes, eventos, hábi
 metas y progreso académico. Incluye un asistente de planificación que puede usar
 CrewAI y OpenAI, además de un planificador local que funciona sin API key.
 
+# Live Demo
+
+Academic Planning Crew se encuentra disponible en línea mediante Streamlit Cloud:
+
+[https://vqm65skzewzqz54alymg3c.streamlit.app/](https://vqm65skzewzqz54alymg3c.streamlit.app/)
+
+Esta demostración permite explorar las funcionalidades principales de la plataforma directamente desde el navegador sin necesidad de instalación local.
+
 ## Funciones principales
 
 - Vista **Hoy** con clases, pendientes, eventos, hábitos, metas y actividad reciente.
@@ -202,6 +210,8 @@ No publiques:
 - datos personales o respaldos
 
 ## Deployment
+
+La aplicación desplegada puede consultarse en la [demo de Streamlit Cloud](https://vqm65skzewzqz54alymg3c.streamlit.app/).
 
 ### Preparación común
 
