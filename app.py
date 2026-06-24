@@ -68,7 +68,11 @@ def main():
         with tab:
             screen(store)
 
-    save_store(store)
+    if not save_store(store):
+        st.warning(
+            "No se pudieron guardar los cambios. Verifica que el directorio de datos "
+            "exista y tenga permisos de escritura."
+        )
 
 
 if __name__ == "__main__":

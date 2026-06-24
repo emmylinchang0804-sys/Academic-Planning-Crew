@@ -91,6 +91,25 @@ def test_todo_section_preferences_round_trip(tmp_path, monkeypatch):
     assert shared.todo_section_preferences(loaded)["done"] is False
 
 
+def test_load_store_repairs_invalid_collection_types(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "academic_planning_store.json"
+    store_path.write_text(
+        '{"settings": [], "todo_items": {}, "activities": "invalid"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(shared, "DATA_DIR", data_dir)
+    monkeypatch.setattr(shared, "STORE_PATH", store_path)
+    monkeypatch.setattr(shared, "BACKUP_DIR", data_dir / "backups")
+
+    loaded = shared.load_store()
+
+    assert isinstance(loaded["settings"], dict)
+    assert loaded["todo_items"] == []
+    assert loaded["activities"] == []
+
+
 def test_retired_integration_logs_are_hidden_from_ui():
     store = shared.default_store()
     store["agent_log"] = [

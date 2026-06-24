@@ -1,9 +1,36 @@
+# Python
 __pycache__/
-*.pyc
-.env
-.streamlit/secrets.toml
-data/
-uploads/
+*.py[cod]
+*$py.class
+.Python
 .venv/
 venv/
+env/
+
+# Tests, coverage and type checkers
+.pytest_cache/
+.pytest-tmp/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Streamlit and secrets
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Local application data
+data/
+uploads/
 work/
+*.log
+*.tmp
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

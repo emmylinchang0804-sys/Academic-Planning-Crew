@@ -25,7 +25,7 @@ forman parte de la versión actual.
 
 ## Requisitos
 
-- Python 3.10 o posterior
+- Python 3.10 o posterior (Python 3.13.14 es la versión validada)
 - Dependencias incluidas en `requirements.txt`
 - API key de OpenAI únicamente para CrewAI y lectura de horarios desde imágenes
 
@@ -66,7 +66,7 @@ Git y no deben publicarse.
 ## Ejecución
 
 ```powershell
-python -m streamlit run app.py
+streamlit run app.py
 ```
 
 La aplicación estará disponible normalmente en
@@ -146,7 +146,8 @@ específicas sin eliminar necesariamente el resto.
 ## Pruebas
 
 ```powershell
-python -m pytest
+python -m pip install -r requirements-dev.txt
+python -m pytest --basetemp .pytest-tmp
 ```
 
 Las pruebas cubren planificación, hábitos, progreso, memoria, respaldos,
@@ -200,18 +201,121 @@ No publiques:
 - el contenido de `data/`
 - datos personales o respaldos
 
-## Despliegue
+## Deployment
 
-Para Streamlit Community Cloud:
+### Preparación común
 
-1. Publica el repositorio sin datos ni secretos reales.
-2. Selecciona `app.py` como archivo principal.
-3. Configura los secretos de OpenAI solo si usarás sus funciones.
-4. Verifica la instalación de `requirements.txt`.
+1. Publica el repositorio sin `.env`, `.streamlit/secrets.toml`, `data/`,
+   respaldos, cachés ni logs.
+2. Usa `requirements.txt` para producción. `requirements-dev.txt` agrega
+   únicamente las herramientas de prueba.
+3. Configura `OPENAI_API_KEY`, `OPENAI_MODEL` y `OPENAI_VISION_MODEL` como
+   secretos o variables de entorno solo si utilizarás OpenAI/CrewAI.
+4. Comprueba antes del despliegue:
 
-La persistencia del sistema de archivos puede ser temporal en servicios
-alojados. Para uso multiusuario se necesita autenticación y almacenamiento
-externo con separación por usuario.
+   ```bash
+   pip install -r requirements.txt
+   streamlit run app.py
+   ```
+
+La aplicación usa `data/academic_planning_store.json` de forma predeterminada.
+Puedes cambiar el directorio sin modificar código:
+
+```bash
+ACADEMIC_PLANNING_DATA_DIR=/ruta/persistente
+```
+
+El directorio debe existir o poder crearse y permitir escritura.
+
+### Streamlit Community Cloud
+
+1. Sube el proyecto a GitHub.
+2. En Streamlit Community Cloud, crea una aplicación y selecciona `app.py`
+   como archivo principal.
+3. Selecciona una versión de Python compatible; se recomienda Python 3.13.
+4. Agrega los valores opcionales de OpenAI en **Advanced settings → Secrets**:
+
+   ```toml
+   OPENAI_API_KEY = "..."
+   OPENAI_MODEL = "gpt-4.1-mini"
+   OPENAI_VISION_MODEL = "gpt-4o-mini"
+   ```
+
+5. Despliega y revisa los logs de instalación.
+
+Community Cloud ejecuta desde la raíz del repositorio y detecta
+`requirements.txt` y `.streamlit/config.toml`. Su sistema de archivos no debe
+considerarse una base de datos durable: el JSON puede perderse tras reinicios o
+redespliegues. Esta opción es adecuada para demostraciones o uso personal sin
+datos críticos.
+
+### Render
+
+El repositorio incluye `render.yaml`.
+
+1. Crea un **Blueprint** o un **Web Service** desde el repositorio.
+2. Si lo configuras manualmente, usa:
+
+   - Build command: `pip install -r requirements.txt`
+   - Start command:
+     `streamlit run app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true`
+   - Health check: `/_stcore/health`
+
+3. Agrega las variables opcionales de OpenAI como secretos.
+4. Para conservar JSON entre reinicios, usa un disco persistente de pago
+   montado, por ejemplo, en `/var/data`, y define:
+
+   ```text
+   ACADEMIC_PLANNING_DATA_DIR=/var/data
+   ```
+
+Sin disco persistente, el sistema de archivos de Render es efímero.
+
+### Railway
+
+El repositorio incluye `railway.toml` con el comando de inicio, health check y
+política de reinicio.
+
+1. Crea un proyecto y conecta el repositorio de GitHub.
+2. Railway detectará Python y ejecutará la instalación de `requirements.txt`.
+3. Genera un dominio público desde **Networking**.
+4. Agrega las variables opcionales de OpenAI.
+5. Para persistencia, adjunta un volumen, móntalo por ejemplo en `/data` y
+   configura:
+
+   ```text
+   ACADEMIC_PLANNING_DATA_DIR=/data
+   ```
+
+El servidor escucha en `0.0.0.0` y en el puerto proporcionado por `$PORT`.
+
+### Persistencia y uso multiusuario
+
+El JSON se conserva por compatibilidad con la arquitectura actual, pero tiene
+estas limitaciones:
+
+- todas las sesiones comparten el mismo perfil y los mismos datos;
+- dos escrituras simultáneas pueden sobrescribir cambios;
+- un archivo local no permite escalar horizontalmente de forma segura;
+- sin volumen o disco persistente, los datos pueden desaparecer.
+
+Para una instancia con múltiples estudiantes, migra en el futuro a SQLite
+solo si habrá una única instancia de aplicación. Para despliegue institucional,
+múltiples réplicas o concurrencia real, usa PostgreSQL y separa todos los
+registros mediante `user_id`.
+
+### Mejoras futuras
+
+- **Login de usuarios:** proveedor de identidad (OpenID Connect/OAuth), sesiones
+  seguras, cierre de sesión, recuperación de cuenta y autorización por usuario.
+- **SQLite:** repositorios para perfil, cursos, eventos, tareas y hábitos;
+  migración controlada desde JSON; transacciones, índices y respaldos. Es
+  apropiado para una sola instancia con volumen persistente.
+- **PostgreSQL:** esquema multiusuario, migraciones, pool de conexiones,
+  restricciones, índices, backups y variable `DATABASE_URL`.
+- **Despliegue institucional:** SSO institucional, roles, protección de datos,
+  auditoría, monitoreo, copias de seguridad, límites de uso de OpenAI,
+  ambientes separados y pruebas de carga.
 
 ## Limitaciones actuales
 

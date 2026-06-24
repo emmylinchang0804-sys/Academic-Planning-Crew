@@ -30,7 +30,7 @@ from academic_planning.habits import (
     is_habit_done as core_is_habit_done,
 )
 from academic_planning.progress_metrics import completion_counts, is_completed
-from academic_planning.tools.database_tool import create_json_backup
+from academic_planning.tools.database_tool import create_json_backup, read_json, write_json
 from academic_planning.workflows.planning_flow import load_dotenv, redistribute_reading_plan
 from academic_planning.profile import (
     default_profile,
@@ -44,7 +44,10 @@ from academic_planning.weekly_goals import (
     weekly_goal_progress,
 )
 
-DATA_DIR = APP_DIR / "data"
+configured_data_dir = os.environ.get("ACADEMIC_PLANNING_DATA_DIR", "").strip()
+DATA_DIR = Path(configured_data_dir).expanduser() if configured_data_dir else APP_DIR / "data"
+if not DATA_DIR.is_absolute():
+    DATA_DIR = APP_DIR / DATA_DIR
 STORE_PATH = DATA_DIR / "academic_planning_store.json"
 BACKUP_DIR = DATA_DIR / "backups"
 load_dotenv(APP_DIR)
@@ -135,15 +138,18 @@ def default_store():
 
 
 def load_store():
-    DATA_DIR.mkdir(exist_ok=True)
-    if not STORE_PATH.exists():
-        save_store(default_store())
-    try:
-        store = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    defaults = default_store()
+    store = read_json(STORE_PATH, defaults)
+    if not isinstance(store, dict):
         store = default_store()
-    for key, value in default_store().items():
-        store.setdefault(key, value)
+    for key, value in defaults.items():
+        current = store.get(key)
+        if isinstance(value, dict) and not isinstance(current, dict):
+            store[key] = value
+        elif isinstance(value, list) and not isinstance(current, list):
+            store[key] = value
+        else:
+            store.setdefault(key, value)
     load_profile(store)
     store.setdefault("todo_items", [])
     store.setdefault("weekly_goals", [])
@@ -253,8 +259,11 @@ def ensure_todo_defaults(item):
 
 
 def save_store(store):
-    DATA_DIR.mkdir(exist_ok=True)
-    STORE_PATH.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        write_json(STORE_PATH, store)
+        return True
+    except OSError:
+        return False
 
 
 def create_backup(store, reason="manual"):
@@ -675,7 +684,7 @@ def color_selector(store, target_key, key, default_color=None, allow_custom=True
         add_col.markdown("<div style='height:27px'></div>", unsafe_allow_html=True)
         with add_col.popover("+"):
             custom = st.color_picker("Nuevo color", value=selected if str(selected).startswith("#") else fallback, key=f"{key}_custom")
-            if st.button("Guardar", key=f"{key}_save", use_container_width=True):
+            if st.button("Guardar", key=f"{key}_save", width="stretch"):
                 store.setdefault("settings", {}).setdefault("custom_schedule_colors", [])
                 if custom not in store["settings"]["custom_schedule_colors"] and custom not in COURSE_PALETTE:
                     store["settings"]["custom_schedule_colors"].append(custom)
@@ -1659,7 +1668,7 @@ def sidebar_profile(store):
             profile["main_weekly_goal"] = st.text_input("Meta semanal principal", profile.get("main_weekly_goal", ""))
             profile["timezone"] = st.text_input("Zona horaria", profile.get("timezone", "America/Guatemala"))
             profile["study_preferences"] = st.text_area("Preferencias de estudio (opcional)", profile.get("study_preferences", ""), height=70)
-            if st.form_submit_button("Guardar perfil", use_container_width=True):
+            if st.form_submit_button("Guardar perfil", width="stretch"):
                 save_profile(store, profile)
                 add_log(store, "Student Profile Manager", "Perfil actualizado")
                 save_store(store)
@@ -1670,7 +1679,7 @@ def sidebar_profile(store):
         keep_profile = st.checkbox("Conservar perfil al reiniciar", value=True)
         keep_settings = st.checkbox("Conservar configuraciones al reiniciar", value=True)
         confirm_reset = st.checkbox("Confirmo que quiero borrar todo")
-        if st.button("Reiniciar todo", use_container_width=True, disabled=not confirm_reset):
+        if st.button("Reiniciar todo", width="stretch", disabled=not confirm_reset):
             reset_store(keep_profile=keep_profile, keep_settings=keep_settings)
             st.success("Todo quedó reiniciado.")
             st.rerun()
@@ -1698,7 +1707,7 @@ def visual_schedule_editor(store, block_id):
         with t2:
             edit_color = color_selector(store, f"visual_color_hex_{block_id}", f"visual_schedule_{block_id}", block.get("color", "#2563eb"), allow_custom=False)
         a1, a2, a3 = st.columns([1, 1, 4])
-        if a1.button("Guardar", key=f"visual_save_{block_id}", use_container_width=True):
+        if a1.button("Guardar", key=f"visual_save_{block_id}", width="stretch"):
             if not edit_title.strip():
                 st.error("Escribe el nombre.")
             elif minutes(edit_end) <= minutes(edit_start):
@@ -1721,7 +1730,7 @@ def visual_schedule_editor(store, block_id):
                     if "edit_schedule" in st.query_params:
                         del st.query_params["edit_schedule"]
                     st.rerun()
-        if a2.button("Cerrar", key=f"visual_close_{block_id}", use_container_width=True):
+        if a2.button("Cerrar", key=f"visual_close_{block_id}", width="stretch"):
             if "edit_schedule" in st.query_params:
                 del st.query_params["edit_schedule"]
             st.rerun()
@@ -1948,7 +1957,7 @@ def manual_schedule_form(store):
             st.session_state["quick_schedule_last_title"] = quick_title.strip()
         with t2:
             quick_color = color_selector(store, "quick_schedule_color_hex", "quick_schedule", suggested_color)
-        if st.button("Agregar al horario", use_container_width=True, key="quick_schedule_submit"):
+        if st.button("Agregar al horario", width="stretch", key="quick_schedule_submit"):
             start_total = minutes(quick_start)
             end_total = start_total + int(quick_duration)
             if not quick_title.strip():
@@ -1987,9 +1996,9 @@ def manual_schedule_form(store):
             try:
                 suffix = Path(uploaded_schedule.name).suffix.lower()
                 if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
-                    st.image(uploaded_schedule, caption="Horario cargado", use_container_width=True)
+                    st.image(uploaded_schedule, caption="Horario cargado", width="stretch")
                     st.caption("Primero convierto la imagen en tabla editable. Luego esa tabla se importa al horario.")
-                    if st.button("Convertir imagen en tabla", use_container_width=True):
+                    if st.button("Convertir imagen en tabla", width="stretch"):
                         imported_rows, import_errors, table_text = read_schedule_image(uploaded_schedule, default_color=import_color)
                         st.session_state["schedule_image_rows"] = imported_rows
                         st.session_state["schedule_image_errors"] = import_errors
@@ -2001,7 +2010,7 @@ def manual_schedule_form(store):
                         placeholder="| dia | inicio | fin | nombre | tipo |\n| Lunes | 07:00 | 07:40 | Matematica | Clase |",
                         key="schedule_image_table_editor",
                     )
-                    if st.button("Leer esta tabla", use_container_width=True):
+                    if st.button("Leer esta tabla", width="stretch"):
                         df = schedule_df_from_markdown(table_text)
                         imported_rows, import_errors = schedule_rows_from_simple_table(df, default_color=import_color)
                         st.session_state["schedule_image_rows"] = imported_rows
@@ -2021,8 +2030,8 @@ def manual_schedule_form(store):
                             "Nombre": row.get("title"),
                             "Tipo": row.get("availability_type"),
                         } for row in imported_rows]
-                        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
-                        if st.button("Importar bloques leidos", use_container_width=True):
+                        st.dataframe(pd.DataFrame(preview_rows), width="stretch", hide_index=True)
+                        if st.button("Importar bloques leidos", width="stretch"):
                             clean_rows, conflict_errors = prepare_imported_schedule_rows(store, imported_rows, replace_schedule)
                             for error in conflict_errors[:8]:
                                 st.warning(error)
@@ -2045,7 +2054,7 @@ def manual_schedule_form(store):
                     if preview_df.empty:
                         st.warning("No pude leer filas en este archivo.")
                     else:
-                        st.dataframe(preview_df.head(8), use_container_width=True, hide_index=True)
+                        st.dataframe(preview_df.head(8), width="stretch", hide_index=True)
                         imported_rows, import_errors = schedule_rows_from_df(preview_df)
                         for row in imported_rows:
                             row["color"] = row.get("color") or import_color
@@ -2056,7 +2065,7 @@ def manual_schedule_form(store):
                                 if len(import_errors) > 12:
                                     st.caption(f"Hay {len(import_errors) - 12} avisos mas.")
                         st.caption(f"Listas para importar: {len(imported_rows)} clases/bloques.")
-                        if st.button("Importar horario", use_container_width=True, disabled=not imported_rows):
+                        if st.button("Importar horario", width="stretch", disabled=not imported_rows):
                             clean_rows, conflict_errors = prepare_imported_schedule_rows(store, imported_rows, replace_schedule)
                             for error in conflict_errors[:8]:
                                 st.warning(error)
@@ -2126,7 +2135,7 @@ def manual_schedule_form(store):
                         key=f"edit_type_{block_id}",
                     )
                     edit_color = color_selector(store, f"edit_color_hex_{block_id}", f"edit_schedule_{block_id}", block.get("color", "#2563eb"), allow_custom=False)
-                    if st.button("Guardar cambios", use_container_width=True, key=f"save_schedule_{block_id}"):
+                    if st.button("Guardar cambios", width="stretch", key=f"save_schedule_{block_id}"):
                         if not edit_title.strip():
                             st.error("Escribe el nombre.")
                         elif minutes(edit_end) <= minutes(edit_start):
@@ -2454,7 +2463,7 @@ def render_weekly_goals(store, editable=False):
                 title = st.text_input("Meta", placeholder="Estudiar 10 horas")
                 goal_label = st.selectbox("Tipo", list(GOAL_TYPES.values()))
                 target = st.number_input("Objetivo", min_value=1.0, value=5.0, step=1.0)
-                if st.form_submit_button("Crear meta", use_container_width=True):
+                if st.form_submit_button("Crear meta", width="stretch"):
                     goal_type = next(key for key, label in GOAL_TYPES.items() if label == goal_label)
                     saved, error = create_goal(store, title, goal_type, target)
                     if saved:
@@ -2831,7 +2840,7 @@ def render_day_detail(store, day, active_filter, settings):
             event_date = st.date_input("Fecha", value=day, key=f"event_date_detail_{day.isoformat()}")
             event_type = st.selectbox("Tipo", list(EVENT_TYPES.keys()), key=f"event_type_detail_{day.isoformat()}")
             color = st.color_picker("Color", event_type_color(store, event_type, EVENT_TYPES[event_type]["color"]), key=f"event_color_detail_{day.isoformat()}")
-            if st.form_submit_button("Guardar evento", use_container_width=True):
+            if st.form_submit_button("Guardar evento", width="stretch"):
                 saved, error = create_event(store, title, event_date, event_type, color)
                 if saved:
                     st.rerun()
@@ -2862,13 +2871,13 @@ def render_day_detail(store, day, active_filter, settings):
             event_type = e3.selectbox("Tipo", list(EVENT_TYPES.keys()), index=list(EVENT_TYPES.keys()).index(event.get("type", "Personal")) if event.get("type", "Personal") in EVENT_TYPES else 0, key=f"month_edit_type_{event_id}")
             picked_color = e4.color_picker("Color", value=color, key=f"month_edit_color_{event_id}")
             b1, b2 = st.columns([1, 1])
-            if b1.button("Guardar cambios", key=f"month_save_event_{event_id}", use_container_width=True):
+            if b1.button("Guardar cambios", key=f"month_save_event_{event_id}", width="stretch"):
                 saved, error = save_event_from_detail(store, event, title, event_date, event_type, picked_color)
                 if saved:
                     st.rerun()
                 st.error(error)
             confirm = st.checkbox("Confirmar eliminación", key=f"month_confirm_delete_{event_id}")
-            if b2.button("Eliminar", key=f"month_delete_event_{event_id}", use_container_width=True, disabled=not confirm):
+            if b2.button("Eliminar", key=f"month_delete_event_{event_id}", width="stretch", disabled=not confirm):
                 store["events"] = [item for item in store["events"] if item.get("event_id") != event_id]
                 save_store(store)
                 st.rerun()
@@ -3130,15 +3139,15 @@ def render_todo_card(store, item, key_prefix):
         estimated = m3.number_input("Minutos", min_value=5, max_value=360, step=5, value=todo_minutes(item), key=f"{key_prefix}_minutes_{item.get('todo_id')}")
 
         a1, a2, a3 = st.columns([1, 1, 1])
-        if a1.button("Subir", key=f"{key_prefix}_up_{item.get('todo_id')}", use_container_width=True):
+        if a1.button("Subir", key=f"{key_prefix}_up_{item.get('todo_id')}", width="stretch"):
             move_todo(store, item["todo_id"], "up")
             save_store(store)
             st.rerun()
-        if a2.button("Bajar", key=f"{key_prefix}_down_{item.get('todo_id')}", use_container_width=True):
+        if a2.button("Bajar", key=f"{key_prefix}_down_{item.get('todo_id')}", width="stretch"):
             move_todo(store, item["todo_id"], "down")
             save_store(store)
             st.rerun()
-        if a3.button("Eliminar", key=f"{key_prefix}_delete_{item.get('todo_id')}", use_container_width=True):
+        if a3.button("Eliminar", key=f"{key_prefix}_delete_{item.get('todo_id')}", width="stretch"):
             store["todo_items"] = [t for t in store["todo_items"] if t.get("todo_id") != item.get("todo_id")]
             save_store(store)
             st.rerun()
@@ -3164,7 +3173,7 @@ def render_todo_card(store, item, key_prefix):
             planned = int(item["meta"].get("page_end", 0)) - int(item["meta"].get("page_start", 0)) + 1
             r1, r2 = st.columns([1, 2])
             pages_done = r1.number_input("Páginas leídas", min_value=0, max_value=5000, value=planned, step=5, key=f"{key_prefix}_pages_{item.get('todo_id')}")
-            if r2.button("Actualizar lectura y replanificar", key=f"{key_prefix}_replan_{item.get('todo_id')}", use_container_width=True):
+            if r2.button("Actualizar lectura y replanificar", key=f"{key_prefix}_replan_{item.get('todo_id')}", width="stretch"):
                 item["done"] = True
                 update_reading_progress(store, item, pages_done)
                 save_store(store)
@@ -3214,7 +3223,7 @@ def tab_todo(store):
         priority = c4.selectbox("Prioridad", ["Alta", "Media", "Baja"], index=1)
         energy = c5.selectbox("Energía", ["Baja", "Normal", "Alta"], index=1)
         estimated = c6.number_input("Minutos", min_value=5, max_value=360, value=30, step=5)
-        if st.form_submit_button("Agregar pendiente", use_container_width=True) and title:
+        if st.form_submit_button("Agregar pendiente", width="stretch") and title:
             target_date = days[DAYS_ES.index(selected_day)]
             course_id = ensure_course(store, course)
             manual_item = {
@@ -3245,17 +3254,17 @@ def tab_todo(store):
         with st.container(border=True):
             st.markdown(f"**Pendientes vencidos:** {len(overdue_items)}")
             r1, r2, r3 = st.columns(3)
-            if r1.button("Mover vencidos a hoy", use_container_width=True):
+            if r1.button("Mover vencidos a hoy", width="stretch"):
                 count = replan_overdue(store, "today")
                 save_store(store)
                 st.success(f"Moví {count} pendientes a hoy.")
                 st.rerun()
-            if r2.button("Mover vencidos a mañana", use_container_width=True):
+            if r2.button("Mover vencidos a mañana", width="stretch"):
                 count = replan_overdue(store, "tomorrow")
                 save_store(store)
                 st.success(f"Moví {count} pendientes a mañana.")
                 st.rerun()
-            if r3.button("Redistribuir hasta entrega", use_container_width=True):
+            if r3.button("Redistribuir hasta entrega", width="stretch"):
                 count = replan_overdue(store, "spread")
                 save_store(store)
                 st.success(f"Redistribuí {count} pendientes.")
@@ -3348,7 +3357,7 @@ def tab_chat(store):
         st.caption(f"Mensajes guardados: {len(store['chat'])}")
         st.caption(f"Actividades en memoria: {len(store['activities'])}")
         st.caption(f"Pendientes en To-do: {len(store['todo_items'])}")
-        if st.button("Limpiar historial del chat", use_container_width=True, key="clear_chat_history"):
+        if st.button("Limpiar historial del chat", width="stretch", key="clear_chat_history"):
             store["chat"] = []
             st.session_state.pop("pending_agent_plan", None)
             save_store(store)
@@ -3373,18 +3382,18 @@ def tab_chat(store):
             if todo_preview:
                 st.dataframe(
                     pd.DataFrame([{"fecha": item.get("date"), "pendiente": item.get("title")} for item in todo_preview]),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             p1, p2 = st.columns([1, 1])
-            if p1.button("Confirmar y guardar", use_container_width=True):
+            if p1.button("Confirmar y guardar", width="stretch"):
                 saved, message = save_agent_plan(store, pending)
                 if saved:
                     st.session_state.pop("pending_agent_plan", None)
                     st.success("Plan guardado.")
                     st.rerun()
                 st.error(message)
-            if p2.button("Descartar propuesta", use_container_width=True):
+            if p2.button("Descartar propuesta", width="stretch"):
                 store["chat"].append({"role": "assistant", "content": "Propuesta descartada. Puedes pedirme otra versión.", "time": now_iso()})
                 st.session_state.pop("pending_agent_plan", None)
                 save_store(store)
@@ -3510,7 +3519,7 @@ def tab_statistics(store):
                 y=alt.Y("Minutos:Q", title="Minutos estimados"),
                 tooltip=["Materia", "Minutos", "Pendientes", "Completadas"],
             )
-            st.altair_chart(styled_chart(load_chart, store), use_container_width=True)
+            st.altair_chart(styled_chart(load_chart, store), width="stretch")
             render_data_table(load_df)
         else:
             st.info("Todavia no hay pendientes con materia para calcular carga.")
@@ -3574,7 +3583,7 @@ def tab_statistics(store):
             xOffset="Tipo:N",
             tooltip=["Semana", "Tipo", "Completados"],
         )
-        st.altair_chart(styled_chart(completed_chart, store), use_container_width=True)
+        st.altair_chart(styled_chart(completed_chart, store), width="stretch")
 
     with chart_right:
         activity_by_day = []
@@ -3595,7 +3604,7 @@ def tab_statistics(store):
             y=alt.Y("Acciones:Q", title="Acciones"),
             tooltip=["Día", "Acciones"],
         )
-        st.altair_chart(styled_chart(activity_chart, store), use_container_width=True)
+        st.altair_chart(styled_chart(activity_chart, store), width="stretch")
 
     st.subheader("Progreso de metas")
     goals = active_weekly_goals(store)
@@ -3616,7 +3625,7 @@ def tab_statistics(store):
             x=alt.X("Progreso:Q", scale=alt.Scale(domain=[0, 100]), title="Progreso (%)"),
             tooltip=["Meta", "Progreso"],
         )
-        st.altair_chart(styled_chart(goal_chart, store, height=220), use_container_width=True)
+        st.altair_chart(styled_chart(goal_chart, store, height=220), width="stretch")
     else:
         st.info("Crea una meta semanal desde Hoy para ver su progreso aquí.")
 
@@ -3663,7 +3672,7 @@ def tab_progress(store):
             delete_todos_opt = options[1].checkbox("Eliminar pendientes asociados", value=True, key=delete_todos_key)
             delete_events_opt = options[2].checkbox("Eliminar eventos del calendario", value=False, key=delete_events_key)
             has_selection = delete_activity_opt or delete_todos_opt or delete_events_opt
-            if cols[3].button("Aplicar eliminacion", key=delete_key, use_container_width=True, disabled=not has_selection):
+            if cols[3].button("Aplicar eliminacion", key=delete_key, width="stretch", disabled=not has_selection):
                 result = delete_activity_bundle(
                     store,
                     activity,
@@ -3728,7 +3737,7 @@ def render_habit_form(store):
             title = c1.text_input("Hábito", placeholder="Repasar vocabulario, leer 20 min...")
             category = c2.text_input("Categoría", placeholder="Estudio")
             target = c3.number_input("Meta semanal", 1, 7, 5)
-            if st.form_submit_button("Crear hábito", use_container_width=True):
+            if st.form_submit_button("Crear hábito", width="stretch"):
                 saved, error = create_habit(store, title, category, target)
                 if saved:
                     st.rerun()
@@ -3931,7 +3940,7 @@ def tab_memory(store):
             st.info("Perfil y configuraciones se conservan por defecto.")
         selected = any([delete_activities, delete_todos, delete_events, delete_habits, delete_logs, delete_schedule, delete_profile, delete_settings])
         confirm = st.checkbox("Confirmo que quiero eliminar las secciones seleccionadas", key="memory_confirm_selective_delete")
-        if st.button("Eliminar datos seleccionados", use_container_width=True, disabled=not selected or not confirm):
+        if st.button("Eliminar datos seleccionados", width="stretch", disabled=not selected or not confirm):
             deleted, kept = clear_selected_memory(store, {
                 "activities": delete_activities,
                 "todos": delete_todos,

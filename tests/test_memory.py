@@ -19,3 +19,11 @@ def test_store_round_trip_and_backup(tmp_path):
     assert loaded["todo_items"][0]["title"] == "Repasar"
     assert json.loads(backup_path.read_text(encoding="utf-8"))["todo_items"]
     assert backup_path.name == "academic_planning_20260623_120000_test_backup.json"
+
+
+def test_read_json_returns_default_for_corrupt_file(tmp_path):
+    store_path = tmp_path / "data" / "academic_planning_store.json"
+    store_path.parent.mkdir(parents=True)
+    store_path.write_text("{not valid json", encoding="utf-8")
+
+    assert read_json(store_path, {"safe": True}) == {"safe": True}
