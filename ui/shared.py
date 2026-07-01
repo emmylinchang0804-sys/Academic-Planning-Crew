@@ -4,6 +4,7 @@ import html as html_lib
 import json
 import os
 import re
+import shutil
 import sys
 import uuid
 from datetime import date, datetime, time, timedelta
@@ -20,6 +21,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from academic_planning.crew import AcademicPlanningCrew
+from academic_planning.auth import UserRegistry, logout_session
 from academic_planning.habits import (
     habit_best_streak as core_habit_best_streak,
     habit_history as core_habit_history,
@@ -31,7 +33,14 @@ from academic_planning.habits import (
 )
 from academic_planning.progress_metrics import completion_counts, is_completed
 from academic_planning.tools.database_tool import create_json_backup, read_json, write_json
-from academic_planning.workflows.planning_flow import load_dotenv, redistribute_reading_plan
+from academic_planning.workflows.planning_flow import (
+    academic_description_from_message,
+    academic_title_from_message,
+    detect_subject,
+    load_dotenv,
+    normalize_text,
+    redistribute_reading_plan,
+)
 from academic_planning.profile import (
     default_profile,
     load_profile,
@@ -50,6 +59,8 @@ if not DATA_DIR.is_absolute():
     DATA_DIR = APP_DIR / DATA_DIR
 STORE_PATH = DATA_DIR / "academic_planning_store.json"
 BACKUP_DIR = DATA_DIR / "backups"
+USERS_DIR = DATA_DIR / "users"
+USER_STORE_FILENAME = "academic_data.json"
 load_dotenv(APP_DIR)
 
 DAYS_ES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
@@ -96,6 +107,7 @@ APP_THEMES = {
 }
 DEFAULT_APP_THEME = "Lila"
 DISPLAY_MODES = ["Claro", "Oscuro", "Automático"]
+AUTH_DISPLAY_MODES = ["Claro", "Oscuro"]
 DEFAULT_DASHBOARD_WIDGETS = {
     "tasks": True,
     "habits": True,
@@ -110,6 +122,16 @@ DEFAULT_TODO_SECTIONS = {
     "week": True,
     "done": True,
 }
+SCHEDULE_EXPORT_VERSION = 1
+SCHEDULE_DATA_KEYS = ("courses", "availability", "schedule", "classes", "timetable")
+SCHEDULE_SETTING_KEYS = (
+    "custom_schedule_colors",
+    "week_view_mode",
+    "show_weekends",
+    "compact_schedule_cards",
+    "study_start",
+    "study_end",
+)
 
 
 def make_id(prefix):
@@ -131,15 +153,64 @@ def default_store():
         "events": [],
         "habits": [],
         "weekly_goals": [],
+        "progress": [],
         "chat": [],
         "agent_log": [],
         "settings": {"app_theme": DEFAULT_APP_THEME, "display_mode": "Automático", "dashboard_widgets": dict(DEFAULT_DASHBOARD_WIDGETS), "todo_sections": dict(DEFAULT_TODO_SECTIONS), "study_start": "07:00", "study_end": "21:00", "week_view_mode": "agenda", "show_weekends": True, "compact_schedule_cards": True, "month_view_density": "comfortable", "month_theme": "clean", "show_todos_in_month": False, "show_habits_in_month": False, "month_show_weekends": True, "event_type_colors": {}, "today_plan_mode": "balanced", "todo_view_mode": "smart"},
     }
 
 
-def load_store():
+def active_user_id():
+    try:
+        user = st.session_state.get("auth_user", {})
+    except Exception:
+        user = {}
+    return user.get("user_id") if isinstance(user, dict) else None
+
+
+def user_data_dir(user_id=None):
+    selected_user_id = user_id or active_user_id()
+    if not selected_user_id:
+        return DATA_DIR
+    clean_user_id = str(selected_user_id)
+    if not re.fullmatch(r"[a-f0-9]{32}", clean_user_id):
+        raise ValueError("Identificador de usuario inválido.")
+    return USERS_DIR / clean_user_id
+
+
+def store_path_for_user(user_id=None):
+    selected_user_id = user_id or active_user_id()
+    if not selected_user_id:
+        return STORE_PATH
+    return user_data_dir(selected_user_id) / USER_STORE_FILENAME
+
+
+def backup_dir_for_user(user_id=None):
+    selected_user_id = user_id or active_user_id()
+    if not selected_user_id:
+        return BACKUP_DIR
+    return user_data_dir(selected_user_id) / "backups"
+
+
+def archive_user_data(user_id):
+    source = user_data_dir(user_id)
+    if not source.exists():
+        return None
+    deleted_users_dir = DATA_DIR / "deleted_accounts"
+    deleted_users_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    destination = deleted_users_dir / f"{user_id}_{timestamp}"
+    counter = 1
+    while destination.exists():
+        destination = deleted_users_dir / f"{user_id}_{timestamp}_{counter}"
+        counter += 1
+    shutil.move(str(source), str(destination))
+    return destination
+
+
+def load_store(user_id=None):
     defaults = default_store()
-    store = read_json(STORE_PATH, defaults)
+    store = read_json(store_path_for_user(user_id), defaults)
     if not isinstance(store, dict):
         store = default_store()
     for key, value in defaults.items():
@@ -174,6 +245,7 @@ def load_store():
     store["settings"].setdefault("event_type_colors", {})
     store["settings"].setdefault("today_plan_mode", "balanced")
     store["settings"].setdefault("todo_view_mode", "smart")
+    store.setdefault("progress", [])
     for event_type, cfg in EVENT_TYPES.items():
         store["settings"]["event_type_colors"].setdefault(event_type, cfg["color"])
     for item in store.get("todo_items", []):
@@ -201,6 +273,164 @@ def set_display_mode(store, mode):
     selected = mode if mode in DISPLAY_MODES else "Automático"
     store.setdefault("settings", {})["display_mode"] = selected
     return selected
+
+
+def session_display_mode():
+    try:
+        selected = st.session_state.get("preferred_display_mode", "Claro")
+    except Exception:
+        selected = "Claro"
+    return selected if selected in AUTH_DISPLAY_MODES else "Claro"
+
+
+def set_session_display_mode(mode):
+    selected = mode if mode in AUTH_DISPLAY_MODES else "Claro"
+    st.session_state["preferred_display_mode"] = selected
+    if st.session_state.get("pending_display_mode") != selected:
+        st.session_state["pending_display_mode"] = selected
+    return selected
+
+
+def consume_pending_session_theme():
+    try:
+        selected = st.session_state.pop("pending_display_mode", None)
+    except Exception:
+        selected = None
+    return selected if selected in AUTH_DISPLAY_MODES else None
+
+
+def initialize_store_theme_from_session(store):
+    selected = consume_pending_session_theme() or session_display_mode()
+    set_display_mode(store, selected)
+    try:
+        st.session_state["preferred_display_mode"] = selected
+        st.session_state["theme_initialized"] = True
+    except Exception:
+        pass
+    return selected
+
+
+def apply_pending_session_theme(store):
+    selected = consume_pending_session_theme()
+    if selected in AUTH_DISPLAY_MODES:
+        if display_mode(store) != selected:
+            set_display_mode(store, selected)
+            try:
+                st.session_state["preferred_display_mode"] = selected
+                st.session_state["theme_initialized"] = True
+            except Exception:
+                pass
+            return True
+    return False
+
+
+def schedule_export_payload(store):
+    settings = store.get("settings", {}) if isinstance(store.get("settings"), dict) else {}
+    related_settings = {
+        key: settings.get(key)
+        for key in SCHEDULE_SETTING_KEYS
+        if key in settings
+    }
+    payload = {
+        "version": SCHEDULE_EXPORT_VERSION,
+        "app": "Academic Planning Crew",
+        "exported_at": now_iso(),
+        "content": {
+            "courses": store.get("courses", []),
+            "availability": store.get("availability", []),
+            "schedule": store.get("schedule", []),
+            "classes": store.get("classes", []),
+            "timetable": store.get("timetable", []),
+            "settings": related_settings,
+        },
+    }
+    return payload
+
+
+def schedule_export_json(store):
+    return json.dumps(schedule_export_payload(store), ensure_ascii=False, indent=2)
+
+
+def validate_schedule_import(payload):
+    if not isinstance(payload, dict):
+        return None, ["El archivo no contiene un objeto JSON válido."]
+    if payload.get("app") != "Academic Planning Crew":
+        return None, ["Este archivo no parece ser un horario exportado por Academic Planning Crew."]
+    try:
+        version = int(payload.get("version", 0) or 0)
+    except (TypeError, ValueError):
+        return None, ["La versión del archivo no es válida."]
+    if version > SCHEDULE_EXPORT_VERSION:
+        return None, ["El archivo fue creado con una versión más nueva y puede no ser compatible."]
+
+    content = payload.get("content")
+    if not isinstance(content, dict):
+        return None, ["Falta la sección content del horario."]
+
+    errors = []
+    cleaned = {}
+    for key in SCHEDULE_DATA_KEYS:
+        value = content.get(key, [])
+        if value is None:
+            value = []
+        if not isinstance(value, list):
+            errors.append(f"La sección {key} debe ser una lista.")
+        else:
+            cleaned[key] = value
+
+    settings = content.get("settings", {})
+    if settings is None:
+        settings = {}
+    if not isinstance(settings, dict):
+        errors.append("La configuración relacionada debe ser un objeto.")
+    else:
+        cleaned["settings"] = {
+            key: value
+            for key, value in settings.items()
+            if key in SCHEDULE_SETTING_KEYS
+        }
+
+    availability = cleaned.get("availability", [])
+    for index, block in enumerate(availability, start=1):
+        if not isinstance(block, dict):
+            errors.append(f"El bloque de disponibilidad #{index} no es válido.")
+            continue
+        required = ("title", "day_index", "start_time", "end_time")
+        missing = [key for key in required if key not in block]
+        if missing:
+            errors.append(f"Al bloque #{index} le faltan campos: {', '.join(missing)}.")
+        try:
+            day_index = int(block.get("day_index", 0))
+        except (TypeError, ValueError):
+            errors.append(f"El bloque #{index} tiene un día inválido.")
+            continue
+        if day_index < 0 or day_index > 6:
+            errors.append(f"El bloque #{index} tiene un día fuera de rango.")
+
+    if errors:
+        return None, errors
+    return cleaned, []
+
+
+def apply_schedule_import(store, imported, replace=False):
+    if replace:
+        for key in SCHEDULE_DATA_KEYS:
+            store[key] = list(imported.get(key, []))
+    else:
+        for key in SCHEDULE_DATA_KEYS:
+            store.setdefault(key, [])
+            if isinstance(store[key], list):
+                store[key].extend(list(imported.get(key, [])))
+            else:
+                store[key] = list(imported.get(key, []))
+    store.setdefault("settings", {}).update(imported.get("settings", {}))
+    add_log(
+        store,
+        "Student Profile Manager",
+        "Horario importado desde JSON",
+        {"replace": bool(replace), "availability": len(imported.get("availability", []))},
+    )
+    return store
 
 
 def dashboard_preferences(store):
@@ -258,28 +488,283 @@ def ensure_todo_defaults(item):
     return item
 
 
-def save_store(store):
+def demo_meta(section):
+    return {"demo": True, "source": "sample_data", "section": section}
+
+
+def is_demo_item(item):
+    if not isinstance(item, dict):
+        return False
+    meta = item.get("meta")
+    return bool(item.get("demo") is True or (isinstance(meta, dict) and meta.get("demo") is True))
+
+
+def create_schedule_block(store, title, day, start_time, end_time, block_type="Clase", color=None, metadata=None):
+    clean_title, error = required_text(title, "el nombre de la clase o actividad")
+    if error:
+        return None, error
+    if isinstance(day, str):
+        if day not in DAYS_ES:
+            return None, "Selecciona un dia valido."
+        day_index = DAYS_ES.index(day)
+        day_name = day
+    else:
+        try:
+            day_index = int(day)
+        except (TypeError, ValueError):
+            return None, "Selecciona un dia valido."
+        if day_index < 0 or day_index >= len(DAYS_ES):
+            return None, "Selecciona un dia valido."
+        day_name = DAYS_ES[day_index]
+    start = parse_time(start_time) if isinstance(start_time, str) else start_time
+    end = parse_time(end_time) if isinstance(end_time, str) else end_time
+    if not start or not end:
+        return None, "Ingresa horas validas."
+    if minutes(end) <= minutes(start):
+        return None, "La hora de fin debe ser despues del inicio."
+    block = {
+        "availability_id": make_id("av"),
+        "title": clean_title,
+        "day_index": day_index,
+        "day_of_week": day_name,
+        "start_time": start.strftime("%H:%M"),
+        "end_time": end.strftime("%H:%M"),
+        "availability_type": block_type or "Clase",
+        "color": color or color_for_subject(store, clean_title, COURSE_PALETTE[len(store.get("availability", [])) % len(COURSE_PALETTE)]),
+    }
+    if metadata:
+        block.update(metadata)
+    store.setdefault("availability", []).append(block)
+    return block, ""
+
+
+def add_schedule_block(store, title, day, start_time, end_time, block_type="Clase", color=None, metadata=None):
+    block, error = create_schedule_block(store, title, day, start_time, end_time, block_type, color, metadata)
+    if error:
+        return None, error
+    remember_course_color(store, block["title"], block["color"])
+    add_log(store, "Student Profile Manager", "Clase agregada al horario", {"title": block["title"], "day": block["day_of_week"]})
+    return block, ""
+
+
+def update_schedule_block(store, block_id, title, day, start_time, end_time, block_type="Clase", color=None):
+    block = next((item for item in store.get("availability", []) if item.get("availability_id") == block_id), None)
+    if not block:
+        return False, "No encontre ese bloque de horario."
+    clean_title, error = required_text(title, "el nombre")
+    if error:
+        return False, error
+    day_index = DAYS_ES.index(day) if day in DAYS_ES else None
+    if day_index is None:
+        return False, "Selecciona un dia valido."
+    start = parse_time(start_time) if isinstance(start_time, str) else start_time
+    end = parse_time(end_time) if isinstance(end_time, str) else end_time
+    if not start or not end:
+        return False, "Ingresa horas validas."
+    if minutes(end) <= minutes(start):
+        return False, "La hora de fin debe ser despues del inicio."
+    conflicts = schedule_conflicts(store, day_index, start, end, exclude_id=block_id)
+    if conflicts:
+        return False, f"Choque de horario con: {conflict_text(conflicts)}"
+    selected_color = color or block.get("color", COURSE_PALETTE[0])
+    remember_course_color(store, clean_title, selected_color)
+    block.update({
+        "title": clean_title,
+        "day_index": day_index,
+        "day_of_week": day,
+        "start_time": start.strftime("%H:%M"),
+        "end_time": end.strftime("%H:%M"),
+        "availability_type": block_type,
+        "color": selected_color,
+    })
+    add_log(store, "Student Profile Manager", "Bloque de horario editado", {"title": clean_title, "day": day})
+    return True, ""
+
+
+def build_sample_data(reference_day=None):
+    today = reference_day or date.today()
+    week = week_start(today)
+    event_days = [today + timedelta(days=offset) for offset in (1, 3, 6, 10)]
+    subject_colors = {
+        "Matemática": "#fde68a",
+        "Física": "#bfdbfe",
+        "Química": "#a7f3d0",
+        "Ética": "#fdba74",
+        "Biología": "#86efac",
+        "Literatura": "#f9a8d4",
+        "Estadística": "#bbf7d0",
+        "Computación": "#93c5fd",
+        "Liderazgo": "#c4b5fd",
+        "Mate aplicada": "#fef3c7",
+        "Inglés": "#fca5a5",
+        "Robótica": "#d6d3d1",
+        "Programación": "#bae6fd",
+        "Seminario": "#ddd6fe",
+        "Laboratorio": "#d8b4fe",
+    }
+    schedule_specs = [
+        ("Matemática", "Lunes", "07:00", "07:40"), ("Matemática", "Lunes", "07:40", "08:20"),
+        ("Física", "Lunes", "08:20", "09:00"), ("Química", "Lunes", "09:20", "10:00"),
+        ("Ética", "Lunes", "10:00", "10:40"), ("Biología", "Lunes", "10:40", "11:20"),
+        ("Literatura", "Lunes", "11:40", "12:20"), ("Estadística", "Lunes", "12:20", "13:00"),
+        ("Literatura", "Martes", "07:00", "07:40"), ("Matemática", "Martes", "07:40", "08:20"),
+        ("Computación", "Martes", "08:20", "09:00"), ("Computación", "Martes", "09:20", "10:00"),
+        ("Liderazgo", "Martes", "10:00", "10:40"), ("Mate aplicada", "Martes", "10:40", "11:20"),
+        ("Inglés", "Martes", "11:40", "12:20"), ("Robótica", "Martes", "12:20", "13:00"),
+        ("Literatura", "Miércoles", "07:00", "07:40"), ("Programación", "Miércoles", "07:40", "08:20"),
+        ("Programación", "Miércoles", "08:20", "09:00"), ("Estadística", "Miércoles", "09:20", "10:00"),
+        ("Seminario", "Miércoles", "10:00", "10:40"), ("Seminario", "Miércoles", "10:40", "11:20"),
+        ("Inglés", "Miércoles", "11:40", "12:20"), ("Biología", "Miércoles", "12:20", "13:00"),
+        ("Computación", "Jueves", "07:00", "07:40"), ("Computación", "Jueves", "07:40", "08:20"),
+        ("Ética", "Jueves", "08:20", "09:00"), ("Inglés", "Jueves", "09:20", "10:00"),
+        ("Matemática", "Jueves", "10:00", "10:40"), ("Mate aplicada", "Jueves", "10:40", "11:20"),
+        ("Química", "Jueves", "11:40", "12:20"), ("Física", "Jueves", "12:20", "13:00"),
+        ("Programación", "Viernes", "07:00", "07:40"), ("Laboratorio", "Viernes", "07:40", "08:20"),
+        ("Mate aplicada", "Viernes", "08:20", "09:00"), ("Química", "Viernes", "09:20", "10:00"),
+        ("Literatura", "Viernes", "10:00", "10:40"), ("Biología", "Viernes", "10:40", "11:20"),
+        ("Matemática", "Viernes", "11:40", "12:20"), ("Inglés", "Viernes", "12:20", "13:00"),
+    ]
+    courses = [
+        {"course_id": f"demo_course_{idx}", "name": name, "color": color, "meta": demo_meta("courses")}
+        for idx, (name, color) in enumerate(subject_colors.items(), start=1)
+    ]
+    availability = []
+    for idx, (title, day, start, end) in enumerate(schedule_specs, start=1):
+        day_index = DAYS_ES.index(day)
+        availability.append({
+            "availability_id": f"demo_av_{idx}",
+            "title": title,
+            "day_index": day_index,
+            "day_of_week": day,
+            "start_time": start,
+            "end_time": end,
+            "availability_type": "Clase",
+            "color": subject_colors.get(title, COURSE_PALETTE[idx % len(COURSE_PALETTE)]),
+            "meta": demo_meta("availability"),
+        })
+    events = [
+        {"event_id": "demo_event_exam", "title": "Examen parcial de Fisica", "date": event_days[0].isoformat(), "type": "Examen", "course": "Fisica", "color": "#fda4af", "meta": demo_meta("events")},
+        {"event_id": "demo_event_project", "title": "Entrega de proyecto de Programacion", "date": event_days[1].isoformat(), "type": "Entrega", "course": "Programacion", "color": "#a78bfa", "meta": demo_meta("events")},
+        {"event_id": "demo_event_group", "title": "Reunion de grupo para presentacion", "date": event_days[2].isoformat(), "type": "Reunion", "course": "Historia", "color": "#99f6e4", "meta": demo_meta("events")},
+        {"event_id": "demo_event_presentation", "title": "Presentacion de Historia", "date": event_days[3].isoformat(), "type": "Entrega", "course": "Historia", "color": "#fdba74", "meta": demo_meta("events")},
+    ]
+    todo_items = [
+        {"todo_id": "demo_todo_1", "title": "Resolver guia de limites", "course": "Matematicas", "date": today.isoformat(), "priority": "Alta", "estimated_minutes": 50, "energy": "Alta", "done": False, "order": 1, "description": "Practicar ejercicios 1 al 12.", "meta": demo_meta("todo_items")},
+        {"todo_id": "demo_todo_2", "title": "Subir avance del proyecto", "course": "Programacion", "date": (today + timedelta(days=1)).isoformat(), "priority": "Alta", "estimated_minutes": 75, "energy": "Normal", "done": False, "order": 2, "description": "Agregar captura y conclusiones.", "meta": demo_meta("todo_items")},
+        {"todo_id": "demo_todo_3", "title": "Leer capitulo de Historia", "course": "Historia", "date": (today + timedelta(days=2)).isoformat(), "priority": "Media", "estimated_minutes": 40, "energy": "Baja", "done": False, "order": 3, "meta": demo_meta("todo_items")},
+        {"todo_id": "demo_todo_4", "title": "Repasar vocabulario de Ingles", "course": "Ingles", "date": today.isoformat(), "priority": "Media", "estimated_minutes": 25, "energy": "Normal", "done": True, "order": 4, "meta": demo_meta("todo_items")},
+        {"todo_id": "demo_todo_5", "title": "Entregar laboratorio de Fisica", "course": "Fisica", "date": (today + timedelta(days=4)).isoformat(), "priority": "Alta", "estimated_minutes": 60, "energy": "Alta", "done": False, "order": 5, "meta": demo_meta("todo_items")},
+    ]
+    habits = []
+    habit_specs = [
+        ("Estudiar 1 hora", 5, "#8b5cf6"),
+        ("Leer", 4, "#93c5fd"),
+        ("Repasar apuntes", 5, "#f9a8d4"),
+        ("Dormir temprano", 5, "#a7f3d0"),
+        ("Hacer ejercicio", 3, "#fdba74"),
+    ]
+    for idx, (title, target, color) in enumerate(habit_specs, start=1):
+        history = {}
+        for offset in range(0, min(target, 4)):
+            history[(week + timedelta(days=offset)).isoformat()] = True
+        habits.append({
+            "habit_id": f"demo_habit_{idx}",
+            "title": title,
+            "weekly_target": target,
+            "color": color,
+            "history": history,
+            "meta": demo_meta("habits"),
+        })
+    activities = [
+        {"activity_id": "demo_activity_project", "title": "Proyecto final: planificador academico", "course": "Programacion", "deadline": event_days[1].isoformat(), "estimated_hours": 5, "priority": "Alta", "status": "En progreso", "meta": demo_meta("activities")},
+        {"activity_id": "demo_activity_exam", "title": "Preparacion para parcial de Fisica", "course": "Fisica", "deadline": event_days[0].isoformat(), "estimated_hours": 3, "priority": "Alta", "status": "Pendiente", "meta": demo_meta("activities")},
+    ]
+    progress = [
+        {"progress_id": "demo_progress_1", "activity_id": "demo_activity_project", "title": "Estructura del proyecto", "done": True, "date": today.isoformat(), "meta": demo_meta("progress")},
+        {"progress_id": "demo_progress_2", "activity_id": "demo_activity_project", "title": "Validacion visual", "done": False, "date": (today + timedelta(days=1)).isoformat(), "meta": demo_meta("progress")},
+        {"progress_id": "demo_progress_3", "activity_id": "demo_activity_exam", "title": "Formulario de formulas", "done": True, "date": today.isoformat(), "meta": demo_meta("progress")},
+    ]
+    weekly_goals = [
+        {
+            "goal_id": "demo_goal_weekly",
+            "title": "Completar 8 horas de estudio enfocado",
+            "goal_type": "study_hours",
+            "target": 8,
+            "week_start": week.isoformat(),
+            "meta": demo_meta("weekly_goals"),
+        }
+    ]
+    logs = [
+        {"time": now_iso(), "agent": "Demo", "action": "Datos de demostracion cargados", "payload": {"sample": True}, "meta": demo_meta("agent_log")}
+    ]
+    return {
+        "courses": courses,
+        "availability": availability,
+        "events": events,
+        "todo_items": [ensure_todo_defaults(item) for item in todo_items],
+        "habits": habits,
+        "activities": activities,
+        "progress": progress,
+        "weekly_goals": weekly_goals,
+        "agent_log": logs,
+    }
+
+
+def apply_sample_data(store, reference_day=None):
+    sample = build_sample_data(reference_day)
+    remove_sample_data(store, create_backup_first=False)
+    for key, items in sample.items():
+        store.setdefault(key, [])
+        store[key].extend(items)
+    settings = store.setdefault("settings", {})
+    settings["sample_data_loaded"] = True
+    settings["sample_data_loaded_at"] = now_iso()
+    settings.setdefault("dashboard_widgets", dict(DEFAULT_DASHBOARD_WIDGETS))
+    settings["week_view_mode"] = "agenda"
+    add_log(store, "Demo", "Datos de demostracion cargados", {"sections": sorted(sample)})
+    return sample
+
+
+def remove_sample_data(store, create_backup_first=True):
+    if create_backup_first:
+        create_backup(store, "before_delete_sample_data")
+    counts = {}
+    for key in ("courses", "availability", "events", "todo_items", "habits", "activities", "progress", "weekly_goals", "agent_log", "schedule", "classes", "timetable"):
+        items = store.get(key)
+        if not isinstance(items, list):
+            continue
+        before = len(items)
+        store[key] = [item for item in items if not is_demo_item(item)]
+        counts[key] = before - len(store[key])
+    settings = store.setdefault("settings", {})
+    settings["sample_data_loaded"] = False
+    settings.pop("sample_data_loaded_at", None)
+    add_log(store, "Demo", "Datos de demostracion eliminados", {"deleted": counts})
+    return counts
+
+
+def save_store(store, user_id=None):
     try:
-        write_json(STORE_PATH, store)
+        write_json(store_path_for_user(user_id), store)
         return True
     except OSError:
         return False
 
 
-def create_backup(store, reason="manual"):
-    return create_json_backup(BACKUP_DIR, store, reason)
+def create_backup(store, reason="manual", user_id=None):
+    return create_json_backup(backup_dir_for_user(user_id), store, reason)
 
 
-def reset_store(keep_profile=False, keep_settings=True):
-    current = load_store()
-    create_backup(current, "before_reset")
+def reset_store(keep_profile=False, keep_settings=True, user_id=None):
+    current = load_store(user_id)
+    create_backup(current, "before_reset", user_id)
     fresh = default_store()
     if keep_profile:
         fresh["profile"] = load_profile(current)
         fresh["student"] = current.get("student", fresh["student"])
     if keep_settings:
         fresh["settings"] = current.get("settings", fresh["settings"])
-    save_store(fresh)
+    save_store(fresh, user_id)
     return fresh
 
 
@@ -905,6 +1390,10 @@ def replan_overdue(store, mode):
 
 def apply_css(store=None):
     store = store or st.session_state.get("_app_store", {})
+    if not isinstance(store, dict):
+        store = {}
+    if not store.get("settings"):
+        store = {"settings": {"app_theme": DEFAULT_APP_THEME, "display_mode": session_display_mode()}}
     st.markdown(
         """
         <style>
@@ -1002,6 +1491,13 @@ def apply_css(store=None):
         .todo-section-title {font-size:1rem; font-weight:850; color:#101828;}
         .todo-section-count {font-size:.74rem; font-weight:800; color:#667085; background:#f2f4f7; border-radius:999px; padding:3px 8px;}
         div[data-testid="stTextInput"] input {font-size:.86rem;}
+        input, textarea, [contenteditable="true"] {
+            caret-color:#4c1d95 !important;
+        }
+        input:focus, textarea:focus, [contenteditable="true"]:focus {
+            outline-color:#8b5cf6 !important;
+            box-shadow:0 0 0 1px rgba(139,92,246,.28) !important;
+        }
         div[data-testid="stCheckbox"] label {font-size:.82rem;}
         .month-toolbar {border:1px solid #e4e7ec; background:#fff; border-radius:8px; padding:12px 14px; margin:8px 0 12px;}
         .month-legend {display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px;}
@@ -1249,6 +1745,41 @@ def apply_css(store=None):
         header[data-testid="stHeader"] button,
         header[data-testid="stHeader"] svg {color:#f8fafc !important; fill:#f8fafc !important;}
         [data-testid="stToolbar"], [data-testid="stDecoration"] {background:transparent !important;}
+        [data-testid="stMainMenu"],
+        [data-testid="stMainMenu"] *,
+        [data-testid="stToolbar"] [role="menu"],
+        [data-testid="stToolbar"] [role="menu"] *,
+        [data-testid="stToolbar"] [data-baseweb="popover"],
+        [data-testid="stToolbar"] [data-baseweb="popover"] > div,
+        [data-testid="stToolbar"] [data-baseweb="popover"] > div > div,
+        [data-testid="stToolbar"] [data-baseweb="popover"] ul,
+        [data-baseweb="popover"] [role="menu"],
+        [data-baseweb="popover"] [role="menu"] *,
+        [data-baseweb="popover"] div:has(> [role="menu"]) {
+            background:#1f2937 !important;
+            color:#f8fafc !important;
+            border-color:#526174 !important;
+        }
+        [data-testid="stToolbar"] [data-baseweb="popover"] {
+            border:1px solid #526174 !important;
+            box-shadow:0 20px 48px rgba(0,0,0,.38) !important;
+        }
+        [data-baseweb="popover"] {
+            background:transparent !important;
+        }
+        [role="menuitem"], [data-testid="stMainMenu"] button {
+            background:#1f2937 !important;
+            color:#f8fafc !important;
+        }
+        [role="menuitem"]:hover, [data-testid="stMainMenu"] button:hover {
+            background:#334155 !important;
+            color:#ffffff !important;
+        }
+        [data-testid="stMainMenu"] hr,
+        [data-testid="stMainMenu"] [role="separator"] {
+            border-color:#475569 !important;
+            background:#475569 !important;
+        }
         .main .block-container {background:rgba(15,23,42,.97) !important; border-color:#475569 !important;}
         .app-title, .section-title, .chat-hero-title, h1, h2, h3, h4,
         p, label, span, [data-testid="stMarkdownContainer"] {color:#f8fafc !important;}
@@ -1274,17 +1805,39 @@ def apply_css(store=None):
                 #172033 68%
             ) !important;
         }
-        input, textarea, [data-baseweb="select"] > div, [data-baseweb="input"] > div {
+        input, textarea, [data-baseweb="select"] > div, [data-baseweb="input"] > div,
+        [data-baseweb="textarea"] textarea, [data-baseweb="input"] input {
             background:#111827 !important; color:#f8fafc !important; border-color:#64748b !important;
+            caret-color:#ffffff !important;
         }
         [data-testid="stTextInputRootElement"],
         [data-testid="stDateInput"] [data-baseweb="input"],
-        [data-testid="stNumberInput"] [data-baseweb="input"] {
+        [data-testid="stNumberInput"] [data-baseweb="input"],
+        [data-testid="stTextArea"] [data-baseweb="textarea"],
+        [data-testid="stMultiSelect"] [data-baseweb="select"],
+        [data-testid="stSelectbox"] [data-baseweb="select"] {
             background:#111827 !important;
             color:#f8fafc !important;
             border-color:#64748b !important;
         }
-        input::placeholder, textarea::placeholder {color:#94a3b8 !important; opacity:1 !important;}
+        input::placeholder, textarea::placeholder,
+        [data-baseweb="select"] input::placeholder {color:#94a3b8 !important; opacity:1 !important;}
+        [data-baseweb="select"] span,
+        [data-baseweb="select"] div,
+        [data-testid="stMultiSelect"] span,
+        [data-testid="stSelectbox"] span {
+            color:#f8fafc !important;
+        }
+        [data-baseweb="tag"] {
+            background:color-mix(in srgb, var(--app-primary) 32%, #273449) !important;
+            color:#ffffff !important;
+            border-color:var(--app-primary) !important;
+        }
+        input:focus, textarea:focus, [contenteditable="true"]:focus {
+            border-color:var(--app-primary) !important;
+            box-shadow:0 0 0 1px color-mix(in srgb, var(--app-primary) 52%, transparent) !important;
+            caret-color:#ffffff !important;
+        }
         [data-baseweb="select"] svg, [data-testid="stSelectbox"] svg {fill:#e2e8f0 !important;}
         div[data-testid="stButton"] button:not([kind="primary"]),
         div[data-testid="stFormSubmitButton"] button:not([kind="primary"]) {
@@ -1422,7 +1975,19 @@ def apply_css(store=None):
             border-color:#475569 !important;
         }
         .todo-section-count, .today-date-pill, .agenda-day-count, .habit-chip,
-        .month-legend-chip {background:#29364b !important; color:#f8fafc !important; border-color:#64748b !important;}
+        .month-legend-chip {
+            background:color-mix(in srgb, var(--app-primary) 20%, #29364b) !important;
+            color:#f8fafc !important;
+            border-color:color-mix(in srgb, var(--app-primary) 42%, #64748b) !important;
+        }
+        div[data-testid="stTabs"] button[aria-selected="true"] {
+            color:#ffffff !important;
+            border-bottom-color:var(--app-primary) !important;
+        }
+        .agenda-card-title::before, .schedule-block-title::before,
+        .smart-list-title::before, .todo-section-title::before {
+            color:#d8b4fe !important;
+        }
         [data-testid="stAlert"] {
             background:#172a4a !important; border-color:#365b8c !important; color:#f8fafc !important;
         }
@@ -1450,7 +2015,9 @@ def apply_css(store=None):
             color:#f8fafc !important;
             border-color:#64748b !important;
         }
-        [data-baseweb="popover"], [data-baseweb="menu"], [data-baseweb="calendar"] {
+        [data-baseweb="popover"], [data-baseweb="menu"], [data-baseweb="calendar"],
+        [data-baseweb="calendar"] > div, [data-baseweb="calendar"] [role="grid"],
+        [data-baseweb="calendar"] [role="row"], [data-baseweb="calendar"] [role="columnheader"] {
             background:#1f2937 !important;
             color:#f8fafc !important;
         }
@@ -1460,6 +2027,30 @@ def apply_css(store=None):
         }
         [data-baseweb="menu"] li:hover, [role="option"]:hover {
             background:#334155 !important;
+        }
+        [data-baseweb="calendar"] button,
+        [data-baseweb="calendar"] [role="button"],
+        [data-baseweb="calendar"] [role="gridcell"],
+        [data-baseweb="calendar"] [aria-label],
+        [data-baseweb="calendar"] span {
+            background:#1f2937 !important;
+            color:#f8fafc !important;
+            border-color:#526174 !important;
+        }
+        [data-baseweb="calendar"] button:hover,
+        [data-baseweb="calendar"] [role="gridcell"]:hover {
+            background:#334155 !important;
+            color:#ffffff !important;
+        }
+        [data-baseweb="calendar"] [aria-selected="true"],
+        [data-baseweb="calendar"] [aria-current="date"],
+        [data-baseweb="calendar"] button[aria-selected="true"] {
+            background:var(--app-primary) !important;
+            color:#ffffff !important;
+        }
+        [data-baseweb="calendar"] svg {
+            fill:#f8fafc !important;
+            color:#f8fafc !important;
         }
         [data-testid="stNumberInput"] button {
             background:#273449 !important; color:#f8fafc !important; border-color:#64748b !important;
@@ -1631,6 +2222,9 @@ def sidebar_profile(store):
         )
         if selected_mode and selected_mode != current_mode:
             set_display_mode(store, selected_mode)
+            if selected_mode in AUTH_DISPLAY_MODES:
+                st.session_state["preferred_display_mode"] = selected_mode
+                st.session_state.pop("pending_display_mode", None)
             save_store(store)
             st.rerun()
         st.caption("La preferencia se guarda en la memoria local.")
@@ -1652,6 +2246,170 @@ def sidebar_profile(store):
                     changed = True
             if changed:
                 save_store(store)
+        st.divider()
+        st.markdown("## Cuenta")
+        st.caption("Preferencias y portabilidad de tus datos.")
+        current_account_mode = display_mode(store)
+        account_mode = st.segmented_control(
+            "Tema",
+            AUTH_DISPLAY_MODES,
+            default=current_account_mode if current_account_mode in AUTH_DISPLAY_MODES else "Claro",
+            key="account_display_mode_selector",
+        )
+        if account_mode and account_mode != current_account_mode:
+            set_display_mode(store, account_mode)
+            st.session_state["preferred_display_mode"] = account_mode
+            st.session_state.pop("pending_display_mode", None)
+            save_store(store)
+            st.rerun()
+
+        st.download_button(
+            "Descargar horario",
+            schedule_export_json(store),
+            file_name="horario.json",
+            mime="application/json",
+            width="stretch",
+        )
+
+        with st.expander("Importar horario", expanded=False):
+            uploaded_schedule_json = st.file_uploader(
+                "Selecciona horario.json",
+                type=["json"],
+                key="account_schedule_json_import",
+            )
+            replace_import = st.checkbox(
+                "Reemplazar mi horario actual",
+                value=False,
+                key="account_replace_schedule_json",
+            )
+            confirm_import = st.checkbox(
+                "Confirmo que quiero importar este horario",
+                value=False,
+                key="account_confirm_schedule_json",
+            )
+            imported_schedule = None
+            if uploaded_schedule_json:
+                try:
+                    payload = json.loads(uploaded_schedule_json.getvalue().decode("utf-8"))
+                    imported_schedule, import_errors = validate_schedule_import(payload)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    import_errors = [f"No pude leer el JSON: {exc}"]
+                if import_errors:
+                    for error in import_errors[:6]:
+                        st.warning(error)
+                else:
+                    st.success("Archivo válido.")
+                    st.caption(
+                        f"Disponibilidad: {len(imported_schedule.get('availability', []))} bloques · "
+                        f"Cursos: {len(imported_schedule.get('courses', []))}"
+                    )
+                    if replace_import:
+                        st.warning("Esto reemplazará tu horario actual. Se creará un respaldo antes de importar.")
+                    else:
+                        st.info("Se agregará al horario actual sin borrar lo existente.")
+            if st.button(
+                "Importar horario",
+                width="stretch",
+                disabled=not (uploaded_schedule_json and imported_schedule and confirm_import),
+                key="account_import_schedule_json_button",
+            ):
+                create_backup(store, "before_schedule_json_import")
+                apply_schedule_import(store, imported_schedule, replace=replace_import)
+                save_store(store)
+                st.success("Horario importado.")
+                st.rerun()
+
+        password_change_message = st.session_state.pop("password_change_success", None)
+        if password_change_message:
+            st.success(password_change_message)
+        active_user = st.session_state.get("auth_user", {}) if hasattr(st, "session_state") else {}
+        if active_user.get("user_id"):
+            with st.expander("Cambiar contraseña", expanded=False):
+                with st.form("account_change_password_form", clear_on_submit=True):
+                    current_password = st.text_input(
+                        "Contraseña actual",
+                        type="password",
+                        key="account_current_password",
+                    )
+                    new_password = st.text_input(
+                        "Nueva contraseña",
+                        type="password",
+                        key="account_new_password",
+                        help="Mínimo 8 caracteres.",
+                    )
+                    confirm_password = st.text_input(
+                        "Confirmar nueva contraseña",
+                        type="password",
+                        key="account_confirm_new_password",
+                    )
+                    submitted = st.form_submit_button("Actualizar contraseña", width="stretch")
+                if submitted:
+                    registry = UserRegistry(DATA_DIR / "auth" / "users.json")
+                    _, error = registry.change_password_confirmed(
+                        active_user.get("user_id"),
+                        current_password,
+                        new_password,
+                        confirm_password,
+                    )
+                    if error:
+                        st.error(error)
+                    else:
+                        st.session_state["password_change_success"] = "Contraseña actualizada."
+                        st.rerun()
+        demo_counts = {
+            key: sum(1 for item in store.get(key, []) if is_demo_item(item))
+            for key in ("courses", "availability", "events", "todo_items", "habits", "activities", "progress", "weekly_goals")
+            if isinstance(store.get(key), list)
+        }
+        demo_total = sum(demo_counts.values())
+        if demo_total:
+            with st.expander("Datos de demostración", expanded=False):
+                st.caption(f"Hay {demo_total} elementos de demostración en tu cuenta. Se borrarán solo esos elementos.")
+                confirm_demo_delete = st.checkbox(
+                    "Confirmo que quiero borrar los datos de demostración",
+                    key="account_confirm_delete_sample_data",
+                )
+                if st.button(
+                    "Borrar datos de demostración",
+                    width="stretch",
+                    disabled=not confirm_demo_delete,
+                    key="account_delete_sample_data_button",
+                ):
+                    counts = remove_sample_data(store)
+                    save_store(store)
+                    st.success(f"Datos de demostración borrados: {sum(counts.values())}.")
+                    st.rerun()
+        else:
+            st.caption("No hay datos de demostración activos en esta cuenta.")
+
+        if active_user.get("user_id"):
+            with st.expander("Eliminar cuenta", expanded=False):
+                st.warning("Esta acción eliminará tu cuenta y todos tus datos. No se puede deshacer.")
+                confirmation = st.text_input(
+                    "Escribe ELIMINAR para confirmar",
+                    key="account_delete_confirmation",
+                )
+                current_password = st.text_input(
+                    "Contraseña actual",
+                    type="password",
+                    key="account_delete_password",
+                )
+                can_delete = confirmation == "ELIMINAR" and bool(current_password)
+                if st.button(
+                    "Eliminar cuenta",
+                    width="stretch",
+                    disabled=not can_delete,
+                    key="account_delete_button",
+                ):
+                    registry = UserRegistry(DATA_DIR / "auth" / "users.json")
+                    deleted_user, error = registry.delete_account(active_user.get("user_id"), current_password)
+                    if error:
+                        st.error(error)
+                    else:
+                        archive_user_data(deleted_user["user_id"])
+                        logout_session(st.session_state)
+                        st.session_state["account_deleted"] = True
+                        st.rerun()
         st.divider()
         st.markdown("## Perfil del Estudiante")
         profile = load_profile(store)
@@ -1970,21 +2728,13 @@ def manual_schedule_form(store):
                 if conflicts:
                     st.error(f"Choque de horario con: {conflict_text(conflicts)}")
                 else:
-                    remember_course_color(store, quick_title.strip(), quick_color)
-                    store["availability"].append({
-                        "availability_id": make_id("av"),
-                        "title": quick_title.strip(),
-                        "day_index": DAYS_ES.index(quick_day),
-                        "day_of_week": quick_day,
-                        "start_time": quick_start.strftime("%H:%M"),
-                        "end_time": end_time.strftime("%H:%M"),
-                        "availability_type": quick_type,
-                        "color": quick_color,
-                    })
-                    add_log(store, "Student Profile Manager", "Clase agregada al horario", {"title": quick_title.strip(), "day": quick_day})
-                    save_store(store)
-                    st.success("Clase agregada.")
-                    st.rerun()
+                    _, error = add_schedule_block(store, quick_title, quick_day, quick_start, end_time, quick_type, quick_color)
+                    if error:
+                        st.error(error)
+                    else:
+                        save_store(store)
+                        st.success("Clase agregada.")
+                        st.rerun()
 
     with st.expander("Cargar horario desde archivo o imagen", expanded=False):
         st.caption("Archivos de tabla: CSV, TXT, XLSX o XLS. Imágenes: PNG, JPG, JPEG o WEBP. Para imagen se usa la API desde .env.")
@@ -2136,26 +2886,21 @@ def manual_schedule_form(store):
                     )
                     edit_color = color_selector(store, f"edit_color_hex_{block_id}", f"edit_schedule_{block_id}", block.get("color", "#2563eb"), allow_custom=False)
                     if st.button("Guardar cambios", width="stretch", key=f"save_schedule_{block_id}"):
-                        if not edit_title.strip():
-                            st.error("Escribe el nombre.")
-                        elif minutes(edit_end) <= minutes(edit_start):
-                            st.error("La hora de fin debe ser después del inicio.")
+                        saved, error = update_schedule_block(
+                            store,
+                            block_id,
+                            edit_title,
+                            edit_day,
+                            edit_start,
+                            edit_end,
+                            edit_type,
+                            edit_color,
+                        )
+                        if not saved:
+                            st.error(error)
                         else:
-                            conflicts = schedule_conflicts(store, DAYS_ES.index(edit_day), edit_start, edit_end, exclude_id=block_id)
-                            if conflicts:
-                                st.error(f"Choque de horario con: {conflict_text(conflicts)}")
-                            else:
-                                remember_course_color(store, edit_title.strip(), edit_color)
-                                block["title"] = edit_title.strip()
-                                block["day_index"] = DAYS_ES.index(edit_day)
-                                block["day_of_week"] = edit_day
-                                block["start_time"] = edit_start.strftime("%H:%M")
-                                block["end_time"] = edit_end.strftime("%H:%M")
-                                block["availability_type"] = edit_type
-                                block["color"] = edit_color
-                                add_log(store, "Student Profile Manager", "Bloque de horario editado", {"title": edit_title.strip(), "day": edit_day})
-                                save_store(store)
-                                st.rerun()
+                            save_store(store)
+                            st.rerun()
                 if cols[4].button("Eliminar", key=f"delete_schedule_{block_id}"):
                     store["availability"] = [item for item in store["availability"] if item.get("availability_id") != block_id]
                     save_store(store)
@@ -3289,6 +4034,16 @@ def tab_todo(store):
 
 def save_agent_plan(store, result):
     activity = dict(result.get("activity") or {})
+    source_message = activity.get("source_message") or result.get("source_message") or ""
+    if source_message:
+        summarized_title = academic_title_from_message(source_message, activity.get("activity_type"))
+        current_title = str(activity.get("title") or "").strip()
+        if not current_title or len(current_title) > 50 or normalize_text(current_title) == normalize_text(source_message):
+            activity["title"] = summarized_title
+        else:
+            activity["title"] = short_todo_title(current_title)
+        activity["course"] = activity.get("course") or detect_subject(source_message) or "General"
+        activity.setdefault("description", academic_description_from_message(source_message, activity["title"]))
     title, error = required_text(activity.get("title"), "un nombre para la actividad")
     if error:
         return False, error
@@ -3309,10 +4064,19 @@ def save_agent_plan(store, result):
     skipped_count = 0
     for index, raw_item in enumerate(result.get("todo_items", [])):
         item = dict(raw_item)
+        if source_message:
+            item_title = str(item.get("title") or "").strip()
+            if not item_title or len(item_title) > 50 or normalize_text(item_title) == normalize_text(source_message):
+                item["title"] = academic_title_from_message(source_message, activity.get("activity_type"))
+            else:
+                item["title"] = short_todo_title(item_title)
+            item.setdefault("description", academic_description_from_message(source_message, item["title"]))
         item["todo_id"] = make_id("todo")
         item["activity_id"] = activity["activity_id"]
         item["course"] = course_name(store, course_id)
         item["color"] = color
+        if activity.get("time") and not item.get("time"):
+            item["time"] = activity["time"]
         item.setdefault("done", False)
         item.setdefault("order", len(store["todo_items"]))
         item.setdefault("internal_task_id", f"{activity['activity_id']}_{index + 1:03d}")
@@ -3328,15 +4092,18 @@ def save_agent_plan(store, result):
     if activity.get("deadline") and saved_count:
         event_id = make_id("event")
         activity.setdefault("event_ids", []).append(event_id)
-        store["events"].append({
+        event = {
             "event_id": event_id,
-            "title": activity.get("title", "Entrega"),
+            "title": short_todo_title(activity.get("title", "Entrega")),
             "date": activity["deadline"],
             "icon": chr(0x1F4CC),
             "type": "Entrega",
             "color": color,
             "activity_id": activity["activity_id"],
-        })
+        }
+        if activity.get("time"):
+            event["time"] = activity["time"]
+        store["events"].append(event)
     response = result.get("summary", f"Actividad dividida en {saved_count} pendientes.")
     if skipped_count:
         response = f"{response} Omití {skipped_count} pendiente(s) repetido(s)."

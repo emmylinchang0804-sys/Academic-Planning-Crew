@@ -2,8 +2,16 @@
 
 import streamlit as st
 
-from ui import calendar, dashboard, habits, memory, planner, progress
-from ui.shared import apply_css, completion_stats, load_store, save_store, sidebar_profile
+from ui.shared import (
+    DATA_DIR,
+    apply_css,
+    apply_pending_session_theme,
+    completion_stats,
+    load_store,
+    save_store,
+    sidebar_profile,
+)
+from ui import auth, calendar, dashboard, habits, memory, planner, progress
 
 
 st.set_page_config(
@@ -34,9 +42,18 @@ def render_header(store):
 
 
 def main():
-    store = load_store()
-    st.session_state["_app_store"] = store
     apply_css()
+    user = st.session_state.get("auth_user")
+    if not user:
+        auth.render_auth_screen(DATA_DIR / "auth" / "users.json")
+        return
+
+    auth.render_user_sidebar(user)
+    store = load_store(user["user_id"])
+    if apply_pending_session_theme(store):
+        save_store(store, user["user_id"])
+    st.session_state["_app_store"] = store
+    apply_css(store)
     sidebar_profile(store)
     render_header(store)
 
@@ -68,7 +85,7 @@ def main():
         with tab:
             screen(store)
 
-    if not save_store(store):
+    if not save_store(store, user["user_id"]):
         st.warning(
             "No se pudieron guardar los cambios. Verifica que el directorio de datos "
             "exista y tenga permisos de escritura."

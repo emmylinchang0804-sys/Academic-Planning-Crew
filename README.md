@@ -80,17 +80,117 @@ streamlit run app.py
 La aplicación estará disponible normalmente en
 `http://localhost:8501`.
 
+## Usuarios, registro e inicio de sesión
+
+Al abrir la aplicación sin una sesión activa se muestran únicamente las
+pantallas **Iniciar sesión** y **Crear cuenta**. Cada persona debe:
+
+1. Crear una cuenta con nombre, correo y una contraseña de al menos 8 caracteres.
+2. Iniciar sesión con ese correo y contraseña.
+3. Usar **Cerrar sesión** en la barra lateral al terminar.
+
+La sesión activa se mantiene en `st.session_state`. Las contraseñas nunca se
+guardan en texto plano: se derivan con PBKDF2-HMAC-SHA256, salt aleatorio y
+comparación segura del hash.
+
+Antes de iniciar sesión se puede elegir **Modo claro** o **Modo oscuro** desde
+la pantalla inicial. El cambio se aplica al instante y, al entrar, se guarda en
+la memoria del usuario activo. Los campos de contraseña de login y registro
+incluyen un botón con ojo para mostrar u ocultar el texto temporalmente.
+
 ## Uso rápido
 
-1. Completa el perfil desde la barra lateral.
-2. Agrega o importa tus clases en **Semana**.
-3. Registra eventos en **Mes**.
-4. Crea pendientes manualmente o usa **Chat / Agentes** para dividir una actividad.
-5. Marca avances desde **Hoy**, **To-do**, **Progreso** o **Hábitos**.
-6. Revisa métricas y tendencias en **Estadísticas**.
+1. Regístrate o inicia sesión.
+2. Completa el perfil desde la barra lateral.
+3. Agrega o importa tus clases en **Semana**.
+4. Registra eventos en **Mes**.
+5. Crea pendientes manualmente o usa **Chat / Agentes** para dividir una actividad.
+6. Marca avances desde **Hoy**, **To-do**, **Progreso** o **Hábitos**.
+7. Revisa métricas y tendencias en **Estadísticas**.
 
 La apariencia y los widgets visibles se configuran desde **Apariencia** en la
 barra lateral.
+
+La sección **Cuenta** de la barra lateral concentra opciones personales:
+
+- Tema claro u oscuro.
+- **Descargar horario** en `horario.json`.
+- **Importar horario** desde `horario.json`, con validación y confirmación.
+- **Borrar datos de demostración**, cuando la cuenta contiene datos de ejemplo.
+- **Cambiar contraseña**, validando la contraseña actual y guardando un hash
+  PBKDF2-HMAC-SHA256 nuevo con salt aleatorio.
+- **Eliminar cuenta**, con confirmación escrita, contraseña actual, cierre de
+  sesión y respaldo final de la carpeta del usuario.
+
+## Datos de demostración
+
+Durante el registro, la app pregunta:
+
+```text
+¿Deseas comenzar con datos de demostración?
+```
+
+Si eliges **Sí**, se crea una cuenta con ejemplos realistas para mostrar todas
+las secciones principales:
+
+- Dashboard con próximas clases, eventos, pendientes, hábitos y avance del día.
+- Horario semanal de lunes a viernes, de 07:00 a 13:00, con bloques de 40
+  minutos y recesos libres de 09:00-09:20 y 11:20-11:40.
+- Materias demo: Matemática, Física, Química, Ética, Biología, Literatura,
+  Estadística, Computación, Liderazgo, Mate aplicada, Inglés, Robótica,
+  Programación, Seminario y Laboratorio.
+- Calendario con examen, entrega de proyecto, reunión de grupo y presentación.
+- To-do con tareas pendientes, próximas y completadas.
+- Hábitos como estudiar 1 hora, leer, repasar apuntes, dormir temprano y hacer ejercicio.
+- Progreso, actividades académicas y una meta semanal coherente con esos datos.
+
+Cada elemento de demostración se marca internamente como demo. Desde **Cuenta →
+Datos de demostración → Borrar datos de demostración** se eliminan solo esos
+elementos del usuario actual. Los datos creados manualmente se conservan.
+
+## Chat / Agentes
+
+Cuando el chat crea actividades, pendientes o eventos, la app resume la
+intención del mensaje antes de guardar. El prompt literal no se usa como título:
+se genera un título académico corto, máximo 50 caracteres, y la descripción
+conserva el contexto útil. Si el mensaje menciona materia, fecha u hora, se
+mantienen en el plan; si falta información esencial, el agente pide aclaración
+antes de crear datos.
+
+Ejemplos:
+
+- “mañana tengo que estudiar para el examen de mate...” se guarda como
+  **Estudiar funciones de Matemática**.
+- “el viernes tengo entrega del proyecto de programación...” se guarda como
+  **Entrega proyecto de Programación**.
+
+## Cambiar contraseña
+
+Desde **Cuenta → Cambiar contraseña**, el usuario puede actualizar su contraseña
+sin cerrar la sesión. La app pide:
+
+- Contraseña actual.
+- Nueva contraseña.
+- Confirmación de la nueva contraseña.
+
+La contraseña actual debe ser correcta, la nueva contraseña debe tener al menos
+8 caracteres y la confirmación debe coincidir. Si alguna validación falla, no se
+modifica el registro. Si todo es correcto, se guarda un nuevo hash
+PBKDF2-HMAC-SHA256 con salt aleatorio en `data/auth/users.json`; la contraseña
+nunca se guarda en texto plano.
+
+## Eliminar cuenta
+
+Desde **Cuenta → Eliminar cuenta** se muestra la advertencia:
+
+```text
+Esta acción eliminará tu cuenta y todos tus datos. No se puede deshacer.
+```
+
+Para continuar, el usuario debe escribir `ELIMINAR` y confirmar su contraseña
+actual. Con contraseña correcta se elimina el registro de `data/auth/users.json`,
+se mueve `data/users/<user_id>/` a `data/deleted_accounts/`, se cierra la sesión
+y se vuelve al login. Con contraseña incorrecta no se elimina nada.
 
 ## Importación de horarios
 
@@ -110,6 +210,32 @@ Ejemplo:
 
 `sample_horario.csv` contiene un horario de ejemplo listo para importar.
 
+## Exportar e importar horario JSON
+
+Desde **Cuenta → Descargar horario** se exporta solo la información relacionada
+con el horario del usuario actual. El archivo recomendado es:
+
+```text
+horario.json
+```
+
+Incluye cursos, disponibilidad/bloques de horario, estructuras de horario
+compatibles y configuración visual relacionada con la vista semanal. No incluye
+tareas, eventos, hábitos, chat, progreso ni datos de otros usuarios.
+
+Para importar, usa **Cuenta → Importar horario**, selecciona un `horario.json`
+compatible y marca la confirmación. Por defecto se agrega al horario actual; si
+activas **Reemplazar mi horario actual**, la app crea un respaldo antes de
+sustituirlo.
+
+## Tema y modo oscuro
+
+El selector de tema está disponible antes de iniciar sesión y también en
+**Apariencia** / **Cuenta** después de entrar. El modo oscuro conserva la paleta
+morada de Academic Planning Crew y ajusta tarjetas, sidebar, botones, entradas,
+selectbox, multiselect, calendario/date picker y menú superior de Streamlit para
+evitar fondos blancos o textos sin contraste.
+
 ## CrewAI y planificador local
 
 `AcademicPlanningCrew` coordina agentes definidos en archivos YAML. Cuando CrewAI
@@ -128,28 +254,60 @@ El planificador local:
 - distribuye lecturas y fases entre días disponibles;
 - considera clases, pendientes y horario de estudio.
 
-## Datos y respaldos
+## Datos, usuarios y respaldos
 
-Los datos locales se guardan en:
+El registro de cuentas se guarda localmente en:
 
 ```text
-data/academic_planning_store.json
+data/auth/users.json
 ```
 
-Los respaldos automáticos se guardan en:
+Cada cuenta recibe un `user_id` aleatorio. El correo nunca se usa como nombre de
+archivo o carpeta. Los datos de cada usuario se guardan en:
 
 ```text
-data/backups/
+data/users/<user_id>/academic_data.json
+```
+
+Sus respaldos automáticos se guardan en:
+
+```text
+data/users/<user_id>/backups/
 ```
 
 La memoria contiene perfil, cursos, horario, actividades, pendientes, eventos,
 hábitos, metas, chat, registros y configuración. Se crean respaldos antes de
 reinicios, reemplazos de horario y limpiezas selectivas.
 
+El archivo anterior `data/academic_planning_store.json` no se elimina ni se
+carga automáticamente en ninguna cuenta. Se conserva como información heredada
+o demo y puede migrarse manualmente si se desea asignarlo a una persona.
+
 La pestaña **Memoria** permite descargar una copia JSON y borrar secciones
 específicas sin eliminar necesariamente el resto.
 
 `sample_data.json` contiene datos ficticios y no se carga automáticamente.
+
+### Limpieza local manual de usuarios
+
+Para reiniciar un entorno local sin cuentas, se puede hacer una limpieza manual
+moviendo estos datos a un respaldo:
+
+```text
+data/auth/users.json
+data/users/
+data/deleted_accounts/
+```
+
+Antes de limpiar, crea una carpeta como:
+
+```text
+data/backups/pre_clean_users_<timestamp>/
+```
+
+La limpieza debe hacerse manualmente en el entorno local. No hay código de la
+aplicación que borre cuentas automáticamente al iniciar ni en producción.
+`data/` permanece ignorado por Git.
 
 ## Pruebas
 
@@ -158,7 +316,8 @@ python -m pip install -r requirements-dev.txt
 python -m pytest --basetemp .pytest-tmp
 ```
 
-Las pruebas cubren planificación, hábitos, progreso, memoria, respaldos,
+Las pruebas cubren registro, login, logout, aislamiento y persistencia por
+usuario, además de planificación, hábitos, progreso, memoria, respaldos,
 preferencias y validaciones de la experiencia.
 
 ## Estructura
@@ -167,6 +326,7 @@ preferencias y validaciones de la experiencia.
 Academic-Planning-Crew/
 ├── app.py
 ├── ui/
+│   ├── auth.py
 │   ├── dashboard.py
 │   ├── planner.py
 │   ├── calendar.py
@@ -181,6 +341,7 @@ Academic-Planning-Crew/
 │   ├── profile/
 │   ├── tools/
 │   ├── workflows/
+│   ├── auth.py
 │   ├── crew.py
 │   ├── habits.py
 │   ├── progress_metrics.py
@@ -198,9 +359,9 @@ herramientas y los flujos de planificación viven en `src/academic_planning/`.
 
 ## Privacidad
 
-La aplicación está diseñada para uso local y de una sola persona. El archivo
-JSON no separa usuarios: si varias personas usan la misma instancia, compartirán
-perfil, horario, tareas y hábitos.
+La aplicación separa los datos por `user_id`: una sesión solo carga y modifica
+su propio `academic_data.json`. Esto incluye perfil, horario, tareas, eventos,
+hábitos, progreso, preferencias, memoria y estadísticas derivadas.
 
 No publiques:
 
@@ -228,8 +389,9 @@ La aplicación desplegada puede consultarse en la [demo de Streamlit Cloud](http
    streamlit run app.py
    ```
 
-La aplicación usa `data/academic_planning_store.json` de forma predeterminada.
-Puedes cambiar el directorio sin modificar código:
+La aplicación usa `data/` de forma predeterminada para el registro de cuentas,
+los archivos por usuario y los respaldos. Puedes cambiar el directorio sin
+modificar código:
 
 ```bash
 ACADEMIC_PLANNING_DATA_DIR=/ruta/persistente
@@ -256,8 +418,9 @@ El directorio debe existir o poder crearse y permitir escritura.
 Community Cloud ejecuta desde la raíz del repositorio y detecta
 `requirements.txt` y `.streamlit/config.toml`. Su sistema de archivos no debe
 considerarse una base de datos durable: el JSON puede perderse tras reinicios o
-redespliegues. Esta opción es adecuada para demostraciones o uso personal sin
-datos críticos.
+redespliegues, incluyendo cuentas y hashes de contraseña. El aislamiento sí
+funciona mientras la instancia conserva esos archivos, pero esta opción sigue
+siendo adecuada únicamente para demostraciones o uso sin datos críticos.
 
 ### Render
 
@@ -301,23 +464,23 @@ El servidor escucha en `0.0.0.0` y en el puerto proporcionado por `$PORT`.
 
 ### Persistencia y uso multiusuario
 
-El JSON se conserva por compatibilidad con la arquitectura actual, pero tiene
-estas limitaciones:
+El JSON se conserva por compatibilidad con la arquitectura actual. Cada usuario
+tiene su propio archivo, pero todavía existen estas limitaciones:
 
-- todas las sesiones comparten el mismo perfil y los mismos datos;
-- dos escrituras simultáneas pueden sobrescribir cambios;
+- dos escrituras simultáneas de la misma cuenta pueden sobrescribir cambios;
+- el registro local no ofrece recuperación de contraseña, verificación de
+  correo, MFA, bloqueo por intentos ni administración de roles;
 - un archivo local no permite escalar horizontalmente de forma segura;
-- sin volumen o disco persistente, los datos pueden desaparecer.
+- sin volumen o disco persistente, las cuentas y los datos pueden desaparecer.
 
-Para una instancia con múltiples estudiantes, migra en el futuro a SQLite
-solo si habrá una única instancia de aplicación. Para despliegue institucional,
-múltiples réplicas o concurrencia real, usa PostgreSQL y separa todos los
-registros mediante `user_id`.
+Para uso institucional, muchos usuarios, múltiples réplicas o concurrencia real,
+migra a PostgreSQL y conserva `user_id` como clave de separación en todas las
+tablas.
 
 ### Mejoras futuras
 
-- **Login de usuarios:** proveedor de identidad (OpenID Connect/OAuth), sesiones
-  seguras, cierre de sesión, recuperación de cuenta y autorización por usuario.
+- **Identidad institucional:** OpenID Connect/OAuth o SSO, verificación de
+  correo, recuperación de cuenta, MFA, roles y sesiones con expiración.
 - **SQLite:** repositorios para perfil, cursos, eventos, tareas y hábitos;
   migración controlada desde JSON; transacciones, índices y respaldos. Es
   apropiado para una sola instancia con volumen persistente.
@@ -329,8 +492,10 @@ registros mediante `user_id`.
 
 ## Limitaciones actuales
 
-- Persistencia en un único archivo JSON.
-- Sin autenticación ni aislamiento multiusuario.
+- Persistencia en archivos JSON separados por usuario.
+- Registro y login locales, sin recuperación de contraseña ni SSO.
+- Riesgo de colisiones si la misma cuenta escribe desde dos sesiones a la vez.
+- Streamlit Community Cloud no garantiza persistencia del sistema de archivos.
 - Sin sincronización externa ni notificaciones.
 - La lectura de imágenes y el flujo generativo requieren una API key válida.
 - Parte de la interfaz continúa centralizada en `ui/shared.py`.

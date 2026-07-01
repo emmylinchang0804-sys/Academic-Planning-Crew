@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import unicodedata
 from datetime import date, datetime, timedelta
 
 from academic_planning.tools.calendar_tool import future_dates
@@ -21,6 +22,13 @@ def load_dotenv(project_root=None):
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def normalize_text(text):
+    value = unicodedata.normalize("NFKD", str(text or "").lower())
+    value = "".join(char for char in value if not unicodedata.combining(char))
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def parse_date_from_text(text, today=None):
     today = today or date.today()
     match = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text)
@@ -31,6 +39,9 @@ def parse_date_from_text(text, today=None):
             except ValueError:
                 pass
     lower = text.lower()
+    normalized = normalize_text(lower)
+    if "manana" in normalized:
+        return today + timedelta(days=1)
     weekdays = {
         "lunes": 0, "martes": 1, "miercoles": 2, "miércoles": 2,
         "jueves": 3, "viernes": 4, "sabado": 5, "sábado": 5, "domingo": 6,
@@ -41,6 +52,23 @@ def parse_date_from_text(text, today=None):
             if delta == 0 or "proximo" in lower or "próximo" in lower:
                 delta = delta or 7
             return today + timedelta(days=delta)
+    return None
+
+
+def parse_time_from_text(text):
+    normalized = normalize_text(text)
+    match = re.search(r"\b([01]?\d|2[0-3])[:h]([0-5]\d)\b", str(text or ""))
+    if match:
+        return f"{int(match.group(1)):02d}:{int(match.group(2)):02d}"
+    hour_match = re.search(r"\b(?:a\s+las\s+)?([1-9]|1[0-2])\s*(am|pm)\b", normalized)
+    if hour_match:
+        hour = int(hour_match.group(1))
+        suffix = hour_match.group(2)
+        if suffix == "pm" and hour != 12:
+            hour += 12
+        if suffix == "am" and hour == 12:
+            hour = 0
+        return f"{hour:02d}:00"
     return None
 
 
@@ -113,6 +141,104 @@ def infer_type(text):
     return "Tarea"
 
 
+SUBJECT_ALIASES = [
+    ("Matemática", ["matematica", "matematicas", "mate"]),
+    ("Programación", ["programacion", "programar"]),
+    ("Física", ["fisica"]),
+    ("Química", ["quimica"]),
+    ("Ética", ["etica"]),
+    ("Biología", ["biologia"]),
+    ("Literatura", ["literatura"]),
+    ("Estadística", ["estadistica"]),
+    ("Computación", ["computacion"]),
+    ("Liderazgo", ["liderazgo"]),
+    ("Mate aplicada", ["mate aplicada", "matematica aplicada"]),
+    ("Inglés", ["ingles"]),
+    ("Robótica", ["robotica"]),
+    ("Seminario", ["seminario"]),
+    ("Laboratorio", ["laboratorio"]),
+    ("Historia", ["historia"]),
+]
+
+ACADEMIC_TOPICS = [
+    ("funciones", "funciones"),
+    ("interfaz", "interfaz"),
+    ("limites", "límites"),
+    ("derivadas", "derivadas"),
+    ("integrales", "integrales"),
+    ("ejercicios", "ejercicios"),
+    ("presentacion", "presentación"),
+]
+
+
+def detect_subject(text):
+    normalized = normalize_text(text)
+    for canonical, aliases in SUBJECT_ALIASES:
+        if any(re.search(rf"\b{re.escape(alias)}\b", normalized) for alias in aliases):
+            return canonical
+    return ""
+
+
+def detect_topic(text):
+    normalized = normalize_text(text)
+    for alias, label in ACADEMIC_TOPICS:
+        if re.search(rf"\b{re.escape(alias)}\b", normalized):
+            return label
+    return ""
+
+
+def short_task_title(title):
+    clean = re.sub(r"\s+", " ", str(title or "Pendiente")).strip()
+    return clean[:47].rstrip(" .,-") + "..." if len(clean) > 50 else clean
+
+
+def academic_title_from_message(message, activity_type=None):
+    normalized = normalize_text(message)
+    subject = detect_subject(message)
+    topic = detect_topic(message)
+    kind = activity_type or infer_type(message)
+
+    if any(word in normalized for word in ["entrega", "entregar"]) and kind == "Proyecto":
+        title = "Entrega proyecto"
+    elif any(word in normalized for word in ["examen", "parcial", "quiz"]) and any(word in normalized for word in ["estudiar", "repasar"]):
+        title = f"Estudiar {topic}" if topic else "Estudiar para examen"
+    elif kind == "Proyecto":
+        title = f"Proyecto {topic}" if topic else "Proyecto académico"
+    elif kind == "Examen":
+        title = f"Estudiar {topic}" if topic else "Preparar examen"
+    elif kind == "Lectura":
+        title = f"Leer {subject}" if subject else "Lectura académica"
+    elif kind == "Laboratorio":
+        title = f"Laboratorio {subject}" if subject else "Laboratorio"
+    else:
+        title = topic.capitalize() if topic else clean_title(message)
+
+    if subject and subject not in title:
+        if title.startswith("Estudiar ") and topic:
+            title = f"{title} de {subject}"
+        else:
+            title = f"{title} de {subject}"
+    return short_task_title(title)
+
+
+def academic_description_from_message(message, title=""):
+    normalized = normalize_text(message)
+    details = []
+    if "ejercicios" in normalized:
+        details.append("repasar ejercicios")
+    if any(word in normalized for word in ["examen", "parcial", "quiz"]):
+        details.append("prepararse para el examen")
+    if "interfaz" in normalized and any(word in normalized for word in ["terminar", "finalizar", "completar"]):
+        details.append("terminar la interfaz antes de la entrega")
+    if details:
+        sentence = " y ".join(details)
+        return sentence[:1].upper() + sentence[1:] + "."
+    clean = re.sub(r"\s+", " ", str(message or "")).strip()
+    if clean and normalize_text(clean) != normalize_text(title):
+        return short_task_title(clean)
+    return ""
+
+
 def clean_title(text):
     title = re.sub(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", "", text)
     title = re.sub(r"\b(tengo|debo|necesito|hacer|realizar|entregar|para|el|la|los|las|que)\b", "", title, flags=re.I)
@@ -143,11 +269,6 @@ def distribute_ranges(total, days):
         ranges.append((day, start, end, amount))
         cursor = end + 1
     return ranges
-
-
-def short_task_title(title):
-    clean = re.sub(r"\s+", " ", str(title or "Pendiente")).strip()
-    return clean[:47].rstrip(" .,-") + "..." if len(clean) > 50 else clean
 
 
 def reading_plan(activity_id, title, total, unit, days):
@@ -233,7 +354,10 @@ def fallback_plan(message, today=None, context=None):
     context = context or {}
     deadline = parse_date_from_text(message, today)
     activity_type = infer_type(message)
-    title = clean_title(message)
+    title = academic_title_from_message(message, activity_type)
+    subject = detect_subject(message)
+    description = academic_description_from_message(message, title)
+    scheduled_time = parse_time_from_text(message)
     if not deadline:
         return {
             "needs_clarification": True,
@@ -265,12 +389,16 @@ def fallback_plan(message, today=None, context=None):
     activity = {
         "title": title,
         "activity_type": activity_type,
-        "course": "General",
+        "course": subject or "General",
         "deadline": deadline.isoformat(),
         "estimated_hours": estimated_hours,
         "priority": "Alta" if (deadline - today).days <= 3 else "Media",
-        "metadata": metadata,
+        "metadata": {**metadata, **({"time": scheduled_time} if scheduled_time else {})},
+        "description": description,
+        "source_message": message,
     }
+    if scheduled_time:
+        activity["time"] = scheduled_time
     return {
         "needs_clarification": False,
         "activity": activity,
@@ -290,6 +418,7 @@ def analyze_activity_payload(message, today=None):
     deadline = parse_date_from_text(message, today)
     activity_type = infer_type(message)
     unit, total = page_or_chapter_count(message)
+    scheduled_time = parse_time_from_text(message)
     missing = []
     if not deadline:
         missing.append("deadline")
@@ -301,9 +430,12 @@ def analyze_activity_payload(message, today=None):
     elif activity_type != "Lectura":
         estimated_hours = {"Ensayo": 6, "Proyecto": 8, "Laboratorio": 4, "Examen": 5}.get(activity_type, 2)
     return {
-        "title": clean_title(message),
+        "title": academic_title_from_message(message, activity_type),
         "activity_type": activity_type,
+        "course": detect_subject(message) or "General",
+        "description": academic_description_from_message(message, academic_title_from_message(message, activity_type)),
         "deadline": deadline.isoformat() if deadline else None,
+        "time": scheduled_time,
         "estimated_hours": estimated_hours,
         "priority": "Alta" if deadline and (deadline - today).days <= 3 else "Media",
         "reading_unit": unit,
@@ -356,6 +488,43 @@ def build_plan_payload(message, context=None, today=None):
     return fallback_plan(message, today or date.today(), context or {})
 
 
+def improve_plan_titles(result, message):
+    if not isinstance(result, dict):
+        return result
+    activity = result.get("activity")
+    if isinstance(activity, dict):
+        activity_type = activity.get("activity_type") or infer_type(message)
+        summary_title = academic_title_from_message(message, activity_type)
+        current_title = str(activity.get("title") or "").strip()
+        if not current_title or len(current_title) > 50 or normalize_text(current_title) == normalize_text(message):
+            activity["title"] = summary_title
+        else:
+            activity["title"] = short_task_title(current_title)
+        activity.setdefault("course", detect_subject(message) or "General")
+        description = academic_description_from_message(message, activity["title"])
+        if description and not activity.get("description"):
+            activity["description"] = description
+        scheduled_time = activity.get("time") or parse_time_from_text(message)
+        if scheduled_time:
+            activity["time"] = scheduled_time
+            metadata = activity.setdefault("metadata", {})
+            if isinstance(metadata, dict):
+                metadata["time"] = scheduled_time
+        activity.setdefault("source_message", message)
+
+    for item in result.get("todo_items", []) if isinstance(result.get("todo_items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        current_title = str(item.get("title") or "").strip()
+        if not current_title or len(current_title) > 50 or normalize_text(current_title) == normalize_text(message):
+            item["title"] = academic_title_from_message(message, activity.get("activity_type") if isinstance(activity, dict) else None)
+        else:
+            item["title"] = short_task_title(current_title)
+        if not item.get("description"):
+            item["description"] = academic_description_from_message(message, item["title"])
+    return result
+
+
 def llm_plan(message, context, today):
     load_dotenv()
     if not os.environ.get("OPENAI_API_KEY"):
@@ -399,6 +568,6 @@ def plan_activity(message, context=None, today=None):
     today = today or date.today()
     llm = llm_plan(message, context or {}, today)
     if llm:
-        return llm
-    return fallback_plan(message, today, context or {})
+        return improve_plan_titles(llm, message)
+    return improve_plan_titles(fallback_plan(message, today, context or {}), message)
 

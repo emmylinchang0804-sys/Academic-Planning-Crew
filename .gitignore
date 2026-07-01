@@ -24,6 +24,11 @@ htmlcov/
 
 # Local application data
 data/
+data/users/
+data/auth/
+data/backups/
+**/academic_data.json
+**/users.json
 uploads/
 work/
 *.log
