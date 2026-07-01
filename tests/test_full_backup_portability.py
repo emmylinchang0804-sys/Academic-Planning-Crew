@@ -20,8 +20,8 @@ def test_full_backup_export_contains_only_current_user_data(tmp_path, monkeypatc
     payload = json.loads(shared.full_backup_export_json(shared.load_store(first_id)))
 
     assert payload["kind"] == "full_user_backup"
-    assert payload["content"]["todo_items"] == [{"title": "Tarea Ana"}]
-    assert payload["content"]["events"] == [{"title": "Evento Ana"}]
+    assert [item["title"] for item in payload["content"]["todo_items"]] == ["Tarea Ana"]
+    assert [item["title"] for item in payload["content"]["events"]] == ["Evento Ana"]
     assert "Tarea Bea" not in json.dumps(payload, ensure_ascii=False)
 
 

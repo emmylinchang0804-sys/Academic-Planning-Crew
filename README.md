@@ -119,8 +119,8 @@ La sección **Cuenta** de la barra lateral concentra opciones personales:
 - **Descargar horario** en `horario.json`.
 - **Importar horario** desde `horario.json`, con validación y confirmación.
 - **Borrar datos de demostración**, cuando la cuenta contiene datos de ejemplo.
-- **Cambiar contraseña**, validando la contraseña actual y guardando un hash
 - **Restaurar datos demo**, para volver a cargar ejemplos si fueron eliminados.
+- **Cambiar contraseña**, validando la contraseña actual y guardando un hash
   PBKDF2-HMAC-SHA256 nuevo con salt aleatorio.
 - **Eliminar cuenta**, con confirmación escrita, contraseña actual, cierre de
   sesión y respaldo final de la carpeta del usuario.
@@ -308,6 +308,10 @@ data/users/<user_id>/backups/
 La memoria contiene perfil, cursos, horario, actividades, pendientes, eventos,
 hábitos, metas, chat, registros y configuración. Se crean respaldos antes de
 reinicios, reemplazos de horario y limpiezas selectivas.
+
+El respaldo completo descargable desde **Cuenta** es la forma recomendada de
+copiar esa memoria fuera del servidor, especialmente en despliegues de
+Streamlit Cloud.
 
 El archivo anterior `data/academic_planning_store.json` no se elimina ni se
 carga automáticamente en ninguna cuenta. Se conserva como información heredada
