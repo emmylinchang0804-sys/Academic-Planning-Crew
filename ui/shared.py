@@ -878,16 +878,89 @@ def remove_sample_data(store, create_backup_first=True):
     return counts
 
 
+def selected_user_id(user_id=None):
+    return user_id or active_user_id()
+
+
 def save_store(store, user_id=None):
     try:
-        storage_backend().save_user_data(user_id, store)
+        storage_backend().save_user_data(selected_user_id(user_id), store)
         return True
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
 def create_backup(store, reason="manual", user_id=None):
-    return storage_backend().backup_user_data(user_id, store, reason)
+    return storage_backend().backup_user_data(selected_user_id(user_id), store, reason)
+
+
+def read_uploaded_json(uploaded_file):
+    if uploaded_file is None:
+        return None, "Selecciona un archivo JSON."
+    try:
+        raw = uploaded_file.getvalue()
+    except AttributeError:
+        raw = uploaded_file.read()
+    if isinstance(raw, str):
+        text = raw
+    else:
+        try:
+            text = bytes(raw).decode("utf-8")
+        except (TypeError, ValueError, UnicodeDecodeError) as exc:
+            return None, f"No pude leer el archivo como UTF-8: {exc}"
+    try:
+        return json.loads(text), ""
+    except json.JSONDecodeError as exc:
+        return None, f"No pude leer el JSON: {exc}"
+
+
+def delete_sample_data_for_user(user_id):
+    clean_user_id = selected_user_id(user_id)
+    if not clean_user_id:
+        return None, "No hay una cuenta activa para borrar datos."
+    store = load_store(clean_user_id)
+    create_backup(store, "before_delete_sample_data", clean_user_id)
+    counts = remove_sample_data(store, create_backup_first=False)
+    if not save_store(store, clean_user_id):
+        return None, "No se pudieron guardar los cambios."
+    return counts, ""
+
+
+def export_schedule_for_user(user_id):
+    clean_user_id = selected_user_id(user_id)
+    if not clean_user_id:
+        return None, "No hay una cuenta activa para exportar horario."
+    return schedule_export_json(load_store(clean_user_id)), ""
+
+
+def import_schedule_for_user(user_id, payload, replace=False):
+    clean_user_id = selected_user_id(user_id)
+    if not clean_user_id:
+        return False, "No hay una cuenta activa para importar horario."
+    imported, errors = validate_schedule_import(payload)
+    if errors:
+        return False, " ".join(errors[:6])
+    store = load_store(clean_user_id)
+    create_backup(store, "before_schedule_json_import", clean_user_id)
+    apply_schedule_import(store, imported, replace=replace)
+    if not save_store(store, clean_user_id):
+        return False, "No se pudo guardar el horario importado."
+    return True, "Horario importado."
+
+
+def import_full_backup_for_user(user_id, payload):
+    clean_user_id = selected_user_id(user_id)
+    if not clean_user_id:
+        return False, "No hay una cuenta activa para importar datos."
+    imported, errors = validate_full_backup_import(payload)
+    if errors:
+        return False, " ".join(errors[:8])
+    store = load_store(clean_user_id)
+    create_backup(store, "before_full_backup_import", clean_user_id)
+    apply_full_backup_import(store, imported)
+    if not save_store(store, clean_user_id):
+        return False, "No se pudieron guardar los datos importados."
+    return True, "Datos importados en esta cuenta."
 
 
 def reset_store(keep_profile=False, keep_settings=True, user_id=None):
@@ -2384,6 +2457,20 @@ def sidebar_profile(store):
         st.divider()
         st.markdown("## Cuenta")
         st.caption("Preferencias y portabilidad de tus datos.")
+        active_user = st.session_state.get("auth_user", {}) if hasattr(st, "session_state") else {}
+        account_user_id = active_user.get("user_id") or active_user_id()
+        for message_key in (
+            "full_backup_import_success",
+            "schedule_import_success",
+            "sample_data_delete_success",
+            "sample_data_restore_success",
+        ):
+            message = st.session_state.pop(message_key, None)
+            if message:
+                st.success(message)
+        account_error = st.session_state.pop("account_action_error", None)
+        if account_error:
+            st.error(account_error)
         current_account_mode = display_mode(store)
         account_mode = st.segmented_control(
             "Tema",
@@ -2395,8 +2482,16 @@ def sidebar_profile(store):
             set_display_mode(store, account_mode)
             st.session_state["preferred_display_mode"] = account_mode
             st.session_state.pop("pending_display_mode", None)
-            save_store(store)
+            save_store(store, account_user_id)
             st.rerun()
+
+        schedule_download_json = schedule_export_json(store)
+        if account_user_id:
+            stored_schedule_json, export_error = export_schedule_for_user(account_user_id)
+            if export_error:
+                st.warning(export_error)
+            elif stored_schedule_json:
+                schedule_download_json = stored_schedule_json
 
         st.download_button(
             "Descargar todos mis datos",
@@ -2423,11 +2518,11 @@ def sidebar_profile(store):
             )
             imported_full_backup = None
             if uploaded_full_backup:
-                try:
-                    payload = json.loads(uploaded_full_backup.getvalue().decode("utf-8"))
+                payload, read_error = read_uploaded_json(uploaded_full_backup)
+                if read_error:
+                    full_import_errors = [read_error]
+                else:
                     imported_full_backup, full_import_errors = validate_full_backup_import(payload)
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    full_import_errors = [f"No pude leer el JSON: {exc}"]
                 if full_import_errors:
                     for error in full_import_errors[:8]:
                         st.warning(error)
@@ -2445,19 +2540,15 @@ def sidebar_profile(store):
                 disabled=not (uploaded_full_backup and imported_full_backup and confirm_full_import),
                 key="account_import_full_backup_button",
             ):
-                create_backup(store, "before_full_backup_import")
-                apply_full_backup_import(store, imported_full_backup)
-                save_store(store)
-                st.session_state["full_backup_import_success"] = "Datos importados en esta cuenta."
-                st.rerun()
-
-        full_backup_message = st.session_state.pop("full_backup_import_success", None)
-        if full_backup_message:
-            st.success(full_backup_message)
+                ok, message = import_full_backup_for_user(account_user_id, payload)
+                if ok:
+                    st.session_state["full_backup_import_success"] = message
+                    st.rerun()
+                st.error(message)
 
         st.download_button(
             "Descargar horario",
-            schedule_export_json(store),
+            schedule_download_json,
             file_name="horario.json",
             mime="application/json",
             width="stretch",
@@ -2481,11 +2572,11 @@ def sidebar_profile(store):
             )
             imported_schedule = None
             if uploaded_schedule_json:
-                try:
-                    payload = json.loads(uploaded_schedule_json.getvalue().decode("utf-8"))
+                payload, read_error = read_uploaded_json(uploaded_schedule_json)
+                if read_error:
+                    import_errors = [read_error]
+                else:
                     imported_schedule, import_errors = validate_schedule_import(payload)
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    import_errors = [f"No pude leer el JSON: {exc}"]
                 if import_errors:
                     for error in import_errors[:6]:
                         st.warning(error)
@@ -2505,16 +2596,15 @@ def sidebar_profile(store):
                 disabled=not (uploaded_schedule_json and imported_schedule and confirm_import),
                 key="account_import_schedule_json_button",
             ):
-                create_backup(store, "before_schedule_json_import")
-                apply_schedule_import(store, imported_schedule, replace=replace_import)
-                save_store(store)
-                st.success("Horario importado.")
-                st.rerun()
+                ok, message = import_schedule_for_user(account_user_id, payload, replace=replace_import)
+                if ok:
+                    st.session_state["schedule_import_success"] = message
+                    st.rerun()
+                st.error(message)
 
         password_change_message = st.session_state.pop("password_change_success", None)
         if password_change_message:
             st.success(password_change_message)
-        active_user = st.session_state.get("auth_user", {}) if hasattr(st, "session_state") else {}
         if active_user.get("user_id"):
             with st.expander("Cambiar contraseña", expanded=False):
                 with st.form("account_change_password_form", clear_on_submit=True):
@@ -2569,10 +2659,14 @@ def sidebar_profile(store):
                     disabled=not confirm_demo_delete,
                     key="account_delete_sample_data_button",
                 ):
-                    counts = remove_sample_data(store)
-                    save_store(store)
-                    st.success(f"Datos de demostración borrados: {sum(counts.values())}.")
-                    st.rerun()
+                    counts, error = delete_sample_data_for_user(account_user_id)
+                    if error:
+                        st.error(error)
+                    else:
+                        st.session_state["sample_data_delete_success"] = (
+                            f"Datos de demostración borrados: {sum(counts.values())}."
+                        )
+                        st.rerun()
         else:
             st.caption("No hay datos de demostración activos en esta cuenta.")
 
@@ -2586,10 +2680,14 @@ def sidebar_profile(store):
             disabled=not confirm_demo_restore,
             key="account_restore_sample_data_button",
         ):
-            create_backup(store, "before_restore_sample_data")
+            create_backup(store, "before_restore_sample_data", account_user_id)
             sample = apply_sample_data(store)
-            save_store(store)
-            st.success(f"Datos de demostración restaurados: {sum(len(items) for items in sample.values())}.")
+            if not save_store(store, account_user_id):
+                st.error("No se pudieron restaurar los datos de demostración.")
+                return
+            st.session_state["sample_data_restore_success"] = (
+                f"Datos de demostración restaurados: {sum(len(items) for items in sample.values())}."
+            )
             st.rerun()
 
         if active_user.get("user_id"):
@@ -2618,6 +2716,7 @@ def sidebar_profile(store):
                     if error:
                         st.error(error)
                     else:
+                        create_backup(store, "before_account_delete", deleted_user["user_id"])
                         archive_user_data(deleted_user["user_id"])
                         logout_session(st.session_state)
                         st.session_state["account_deleted"] = True
@@ -2641,7 +2740,7 @@ def sidebar_profile(store):
             if st.form_submit_button("Guardar perfil", width="stretch"):
                 save_profile(store, profile)
                 add_log(store, "Student Profile Manager", "Perfil actualizado")
-                save_store(store)
+                save_store(store, account_user_id)
                 st.success("Guardado")
 
         st.divider()
@@ -2650,7 +2749,7 @@ def sidebar_profile(store):
         keep_settings = st.checkbox("Conservar configuraciones al reiniciar", value=True)
         confirm_reset = st.checkbox("Confirmo que quiero borrar todo")
         if st.button("Reiniciar todo", width="stretch", disabled=not confirm_reset):
-            reset_store(keep_profile=keep_profile, keep_settings=keep_settings)
+            reset_store(keep_profile=keep_profile, keep_settings=keep_settings, user_id=account_user_id)
             st.success("Todo quedó reiniciado.")
             st.rerun()
 
