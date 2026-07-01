@@ -3,7 +3,6 @@
 import streamlit as st
 
 from ui.shared import (
-    DATA_DIR,
     apply_css,
     apply_pending_session_theme,
     completion_stats,
@@ -46,7 +45,7 @@ def main():
     apply_css()
     user = active_session_user(st.session_state)
     if not user:
-        auth.render_auth_screen(DATA_DIR / "auth" / "users.json")
+        auth.render_auth_screen()
         return
 
     auth.render_user_sidebar(user)

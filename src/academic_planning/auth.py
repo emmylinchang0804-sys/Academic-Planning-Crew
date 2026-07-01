@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from academic_planning.tools.database_tool import read_json, write_json
+from academic_planning.storage.factory import get_storage
 
 
 PBKDF2_ITERATIONS = 310_000
@@ -64,9 +64,11 @@ def verify_password(password, password_record):
 class UserRegistry:
     def __init__(self, path):
         self.path = Path(path)
+        data_dir = self.path.parent.parent if self.path.parent.name == "auth" else self.path.parent
+        self.storage = get_storage(data_dir=data_dir, auth_users_path=self.path)
 
     def _load(self):
-        registry = read_json(self.path, {"version": 1, "users": []})
+        registry = self.storage.load_auth_users()
         if not isinstance(registry, dict) or not isinstance(registry.get("users"), list):
             return {"version": 1, "users": []}
         return registry
@@ -95,7 +97,7 @@ class UserRegistry:
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
             registry["users"].append(user)
-            write_json(self.path, registry)
+            self.storage.save_auth_users(registry)
         return public_user(user), ""
 
     def authenticate(self, email, password):
@@ -134,7 +136,7 @@ class UserRegistry:
                 return None, "La contraseÃ±a actual no es correcta."
             user["password"] = hash_password(new_password)
             user["password_updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            write_json(self.path, registry)
+            self.storage.save_auth_users(registry)
         return public_user(user), ""
 
     def change_password_confirmed(self, user_id, current_password, new_password, confirmation):
@@ -163,7 +165,7 @@ class UserRegistry:
                 for item in registry["users"]
                 if str(item.get("user_id", "")) != clean_user_id
             ]
-            write_json(self.path, registry)
+            self.storage.save_auth_users(registry)
         return public_user(user), ""
 
 

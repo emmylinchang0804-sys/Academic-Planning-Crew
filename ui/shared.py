@@ -4,7 +4,6 @@ import html as html_lib
 import json
 import os
 import re
-import shutil
 import sys
 import uuid
 from datetime import date, datetime, time, timedelta
@@ -31,7 +30,7 @@ from academic_planning.habits import (
     is_habit_done as core_is_habit_done,
 )
 from academic_planning.progress_metrics import completion_counts, is_completed
-from academic_planning.tools.database_tool import create_json_backup, read_json, write_json
+from academic_planning.storage.factory import get_storage
 from academic_planning.workflows.planning_flow import (
     academic_description_from_message,
     academic_title_from_message,
@@ -203,49 +202,49 @@ def active_user_id():
         return None
 
 
+def storage_backend():
+    storage = get_storage(data_dir=DATA_DIR)
+    if hasattr(storage, "users_dir"):
+        storage.users_dir = USERS_DIR
+    if hasattr(storage, "legacy_store_path"):
+        storage.legacy_store_path = STORE_PATH
+    if hasattr(storage, "legacy_backup_dir"):
+        storage.legacy_backup_dir = BACKUP_DIR
+    return storage
+
+
+def auth_users_path():
+    return DATA_DIR / "auth" / "users.json"
+
+
 def user_data_dir(user_id=None):
     selected_user_id = user_id or active_user_id()
     if not selected_user_id:
         return DATA_DIR
-    clean_user_id = str(selected_user_id)
-    if not re.fullmatch(r"[a-f0-9]{32}", clean_user_id):
-        raise ValueError("Identificador de usuario inválido.")
-    return USERS_DIR / clean_user_id
+    return storage_backend().user_data_dir(selected_user_id)
 
 
 def store_path_for_user(user_id=None):
     selected_user_id = user_id or active_user_id()
     if not selected_user_id:
         return STORE_PATH
-    return user_data_dir(selected_user_id) / USER_STORE_FILENAME
+    return storage_backend().user_store_path(selected_user_id)
 
 
 def backup_dir_for_user(user_id=None):
     selected_user_id = user_id or active_user_id()
     if not selected_user_id:
         return BACKUP_DIR
-    return user_data_dir(selected_user_id) / "backups"
+    return storage_backend().user_backup_dir(selected_user_id)
 
 
 def archive_user_data(user_id):
-    source = user_data_dir(user_id)
-    if not source.exists():
-        return None
-    deleted_users_dir = DATA_DIR / "deleted_accounts"
-    deleted_users_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    destination = deleted_users_dir / f"{user_id}_{timestamp}"
-    counter = 1
-    while destination.exists():
-        destination = deleted_users_dir / f"{user_id}_{timestamp}_{counter}"
-        counter += 1
-    shutil.move(str(source), str(destination))
-    return destination
+    return storage_backend().delete_user_data(user_id)
 
 
 def load_store(user_id=None):
     defaults = default_store()
-    store = read_json(store_path_for_user(user_id), defaults)
+    store = storage_backend().load_user_data(user_id)
     if not isinstance(store, dict):
         store = default_store()
     for key, value in defaults.items():
@@ -881,14 +880,14 @@ def remove_sample_data(store, create_backup_first=True):
 
 def save_store(store, user_id=None):
     try:
-        write_json(store_path_for_user(user_id), store)
+        storage_backend().save_user_data(user_id, store)
         return True
     except OSError:
         return False
 
 
 def create_backup(store, reason="manual", user_id=None):
-    return create_json_backup(backup_dir_for_user(user_id), store, reason)
+    return storage_backend().backup_user_data(user_id, store, reason)
 
 
 def reset_store(keep_profile=False, keep_settings=True, user_id=None):
@@ -2539,7 +2538,7 @@ def sidebar_profile(store):
                 if submitted:
                     from academic_planning.auth import UserRegistry
 
-                    registry = UserRegistry(DATA_DIR / "auth" / "users.json")
+                    registry = UserRegistry(auth_users_path())
                     _, error = registry.change_password_confirmed(
                         active_user.get("user_id"),
                         current_password,
@@ -2614,7 +2613,7 @@ def sidebar_profile(store):
                 ):
                     from academic_planning.auth import UserRegistry, logout_session
 
-                    registry = UserRegistry(DATA_DIR / "auth" / "users.json")
+                    registry = UserRegistry(auth_users_path())
                     deleted_user, error = registry.delete_account(active_user.get("user_id"), current_password)
                     if error:
                         st.error(error)

@@ -286,6 +286,21 @@ El planificador local:
 
 ## Datos, usuarios y respaldos
 
+La persistencia usa una capa Storage para separar la UI del mecanismo de
+guardado. En esta fase el backend activo es `JSONStorage`, que conserva la
+estructura actual de archivos y mantiene compatibilidad con Streamlit Cloud.
+
+Configuración explícita recomendada para esta fase:
+
+```env
+STORAGE_BACKEND=json
+```
+
+Si no se define `STORAGE_BACKEND`, la app usa JSON por defecto. Si existe
+`DATABASE_URL` pero PostgreSQL todavía no está implementado, la app muestra una
+advertencia clara y sigue usando JSON para no romper login, multiusuario ni
+datos existentes.
+
 El registro de cuentas se guarda localmente en:
 
 ```text
@@ -321,6 +336,30 @@ La pestaña **Memoria** permite descargar una copia JSON y borrar secciones
 específicas sin eliminar necesariamente el resto.
 
 `sample_data.json` contiene datos ficticios y no se carga automáticamente.
+
+### Backends de almacenamiento
+
+`JSONStorage` es el backend actual. Guarda datos por usuario, respaldos,
+cuentas eliminadas y `users.json` con las mismas rutas que la app ya usaba:
+
+```text
+data/auth/users.json
+data/users/<user_id>/academic_data.json
+data/users/<user_id>/backups/
+data/deleted_accounts/
+```
+
+`PostgreSQLStorage` existe solo como preparación técnica. No está activado y
+sus métodos lanzan `NotImplementedError` con un mensaje claro. Será la opción
+recomendada para producción institucional cuando se implemente el esquema,
+migraciones, transacciones, índices y operación con `DATABASE_URL`.
+
+### Roadmap técnico de persistencia
+
+1. `JSONStorage` actual, compatible con los archivos existentes.
+2. Interfaz Storage usada por UI y autenticación.
+3. `PostgreSQLStorage` futuro para despliegues institucionales.
+4. Migración controlada de datos JSON a PostgreSQL.
 
 ### Limpieza local manual de usuarios
 

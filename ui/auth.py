@@ -6,6 +6,7 @@ from academic_planning.auth import UserRegistry, active_session_user, login_sess
 from ui.shared import (
     AUTH_DISPLAY_MODES,
     apply_sample_data,
+    auth_users_path,
     default_store,
     display_mode,
     initialize_store_theme_from_session,
@@ -24,7 +25,7 @@ def password_input(label, key, help_text=None):
     )
 
 
-def render_auth_screen(registry_path):
+def render_auth_screen(registry_path=None):
     if active_session_user(st.session_state):
         return
     st.markdown(
@@ -46,7 +47,7 @@ def render_auth_screen(registry_path):
         st.rerun()
 
     login_tab, register_tab = st.tabs(["Iniciar sesión", "Crear cuenta"])
-    registry = UserRegistry(registry_path)
+    registry = UserRegistry(registry_path or auth_users_path())
 
     with login_tab:
         email = st.text_input("Correo electrónico", key="login_email")
