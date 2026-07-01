@@ -1,6 +1,6 @@
 import json
 
-from academic_planning.auth import UserRegistry, login_session, logout_session
+from academic_planning.auth import UserRegistry, active_session_user, login_session, logout_session
 from ui import shared
 
 
@@ -103,8 +103,26 @@ def test_login_uses_new_password_and_rejects_old_password(tmp_path):
     assert registry.authenticate("ana@example.com", "strong-pass") is None
 
 
-def test_logout_clears_active_session():
-    session = {"widget": "value"}
+def test_change_password_does_not_clear_active_session(tmp_path):
+    registry = UserRegistry(tmp_path / "users.json")
+    user, _ = registry.register("ana@example.com", "strong-pass", "Ana")
+    session = {}
+    login_session(session, user)
+
+    changed, error = registry.change_password_confirmed(
+        user["user_id"],
+        "strong-pass",
+        "new-strong-pass",
+        "new-strong-pass",
+    )
+
+    assert error == ""
+    assert changed["user_id"] == user["user_id"]
+    assert active_session_user(session)["user_id"] == user["user_id"]
+
+
+def test_logout_only_clears_auth_session_keys():
+    session = {"widget": "value", "preferred_display_mode": "Oscuro"}
     login_session(
         session,
         {"user_id": "a" * 32, "email": "a@example.com", "display_name": "A"},
@@ -112,7 +130,53 @@ def test_logout_clears_active_session():
 
     logout_session(session)
 
-    assert session == {}
+    assert session == {"widget": "value", "preferred_display_mode": "Oscuro"}
+
+
+def test_login_session_sets_stable_current_user_keys():
+    session = {}
+    user = {"user_id": "a" * 32, "email": "a@example.com", "display_name": "A"}
+
+    login_session(session, user)
+
+    assert session["auth_authenticated"] is True
+    assert session["current_user_id"] == user["user_id"]
+    assert session["current_user_email"] == user["email"]
+    assert active_session_user(session)["user_id"] == user["user_id"]
+
+
+def test_active_session_user_restores_auth_user_from_current_keys():
+    session = {
+        "auth_authenticated": True,
+        "current_user_id": "a" * 32,
+        "current_user_email": "a@example.com",
+        "current_user_name": "A",
+        "preferred_display_mode": "Claro",
+    }
+
+    user = active_session_user(session)
+
+    assert user == {
+        "user_id": "a" * 32,
+        "email": "a@example.com",
+        "display_name": "A",
+    }
+    assert session["auth_user"]["user_id"] == "a" * 32
+
+
+def test_normal_session_operations_do_not_logout_user(monkeypatch):
+    fake_session = {}
+    monkeypatch.setattr(shared, "st", type("FakeStreamlit", (), {"session_state": fake_session}))
+    user = {"user_id": "a" * 32, "email": "a@example.com", "display_name": "A"}
+    login_session(fake_session, user)
+    store = shared.default_store()
+
+    shared.set_session_display_mode("Oscuro")
+    shared.apply_pending_session_theme(store)
+    shared.apply_sample_data(store)
+    shared.remove_sample_data(store, create_backup_first=False)
+
+    assert active_session_user(fake_session)["user_id"] == user["user_id"]
 
 
 def test_user_data_is_isolated_and_persists(tmp_path, monkeypatch):

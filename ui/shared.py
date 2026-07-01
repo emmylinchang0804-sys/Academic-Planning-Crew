@@ -21,7 +21,6 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from academic_planning.crew import AcademicPlanningCrew
-from academic_planning.auth import UserRegistry, logout_session
 from academic_planning.habits import (
     habit_best_streak as core_habit_best_streak,
     habit_history as core_habit_history,
@@ -132,6 +131,37 @@ SCHEDULE_SETTING_KEYS = (
     "study_start",
     "study_end",
 )
+FULL_BACKUP_EXPORT_VERSION = 1
+FULL_BACKUP_STORE_KEYS = (
+    "student",
+    "profile",
+    "courses",
+    "availability",
+    "activities",
+    "todo_items",
+    "events",
+    "habits",
+    "weekly_goals",
+    "progress",
+    "chat",
+    "agent_log",
+    "settings",
+    "schedule",
+    "classes",
+    "timetable",
+)
+SENSITIVE_BACKUP_KEYS = {
+    "password",
+    "password_hash",
+    "hash",
+    "salt",
+    "token",
+    "secret",
+    "api_key",
+    "apikey",
+    "auth",
+    "users",
+}
 
 
 def make_id(prefix):
@@ -165,7 +195,12 @@ def active_user_id():
         user = st.session_state.get("auth_user", {})
     except Exception:
         user = {}
-    return user.get("user_id") if isinstance(user, dict) else None
+    if isinstance(user, dict) and user.get("user_id"):
+        return user.get("user_id")
+    try:
+        return st.session_state.get("current_user_id")
+    except Exception:
+        return None
 
 
 def user_data_dir(user_id=None):
@@ -349,6 +384,107 @@ def schedule_export_payload(store):
 
 def schedule_export_json(store):
     return json.dumps(schedule_export_payload(store), ensure_ascii=False, indent=2)
+
+
+def remove_sensitive_backup_data(value):
+    if isinstance(value, dict):
+        clean = {}
+        for key, item in value.items():
+            normalized = str(key).strip().casefold()
+            if normalized in SENSITIVE_BACKUP_KEYS:
+                continue
+            clean[key] = remove_sensitive_backup_data(item)
+        return clean
+    if isinstance(value, list):
+        return [remove_sensitive_backup_data(item) for item in value]
+    return value
+
+
+def full_backup_export_payload(store):
+    content = {}
+    for key in FULL_BACKUP_STORE_KEYS:
+        if key in store:
+            content[key] = remove_sensitive_backup_data(store.get(key))
+    content["statistics"] = completion_stats(store)
+    return {
+        "version": FULL_BACKUP_EXPORT_VERSION,
+        "app": "Academic Planning Crew",
+        "kind": "full_user_backup",
+        "exported_at": now_iso(),
+        "content": content,
+    }
+
+
+def full_backup_export_json(store):
+    return json.dumps(full_backup_export_payload(store), ensure_ascii=False, indent=2)
+
+
+def validate_full_backup_import(payload):
+    if not isinstance(payload, dict):
+        return None, ["El archivo no contiene un objeto JSON válido."]
+    if payload.get("app") != "Academic Planning Crew" or payload.get("kind") != "full_user_backup":
+        return None, ["Este archivo no parece ser un respaldo completo de Academic Planning Crew."]
+    try:
+        version = int(payload.get("version", 0) or 0)
+    except (TypeError, ValueError):
+        return None, ["La versión del respaldo no es válida."]
+    if version > FULL_BACKUP_EXPORT_VERSION:
+        return None, ["El respaldo fue creado con una versión más nueva y puede no ser compatible."]
+
+    content = payload.get("content")
+    if not isinstance(content, dict):
+        return None, ["Falta la sección content del respaldo."]
+
+    defaults = default_store()
+    errors = []
+    cleaned = {}
+    for key, default_value in defaults.items():
+        value = content.get(key, default_value)
+        if isinstance(default_value, list):
+            if value is None:
+                value = []
+            if not isinstance(value, list):
+                errors.append(f"La sección {key} debe ser una lista.")
+            else:
+                cleaned[key] = remove_sensitive_backup_data(value)
+        elif isinstance(default_value, dict):
+            if value is None:
+                value = {}
+            if not isinstance(value, dict):
+                errors.append(f"La sección {key} debe ser un objeto.")
+            else:
+                merged = dict(default_value)
+                merged.update(remove_sensitive_backup_data(value))
+                cleaned[key] = merged
+
+    for key in ("schedule", "classes", "timetable"):
+        value = content.get(key, [])
+        if value is None:
+            value = []
+        if not isinstance(value, list):
+            errors.append(f"La sección {key} debe ser una lista.")
+        else:
+            cleaned[key] = remove_sensitive_backup_data(value)
+
+    statistics = content.get("statistics", {})
+    if statistics is not None and not isinstance(statistics, dict):
+        errors.append("La sección statistics debe ser un objeto.")
+
+    if errors:
+        return None, errors
+    return cleaned, []
+
+
+def apply_full_backup_import(store, imported):
+    fresh = default_store()
+    for key, value in imported.items():
+        if key in FULL_BACKUP_STORE_KEYS:
+            fresh[key] = remove_sensitive_backup_data(value)
+    store.clear()
+    store.update(fresh)
+    load_profile(store)
+    add_log(store, "Cuenta", "Respaldo completo importado", {"sections": sorted(imported)})
+    return store
 
 
 def validate_schedule_import(payload):
@@ -2264,6 +2400,63 @@ def sidebar_profile(store):
             st.rerun()
 
         st.download_button(
+            "Descargar todos mis datos",
+            full_backup_export_json(store),
+            file_name="academic_planning_backup.json",
+            mime="application/json",
+            width="stretch",
+        )
+
+        with st.expander("Importar todos mis datos", expanded=False):
+            st.warning(
+                "Esto sobrescribirá los datos de esta cuenta. Antes de importar "
+                "se creará un respaldo automático de tus datos actuales."
+            )
+            uploaded_full_backup = st.file_uploader(
+                "Selecciona academic_planning_backup.json",
+                type=["json"],
+                key="account_full_backup_import",
+            )
+            confirm_full_import = st.checkbox(
+                "Confirmo que quiero sobrescribir los datos de esta cuenta",
+                value=False,
+                key="account_confirm_full_backup_import",
+            )
+            imported_full_backup = None
+            if uploaded_full_backup:
+                try:
+                    payload = json.loads(uploaded_full_backup.getvalue().decode("utf-8"))
+                    imported_full_backup, full_import_errors = validate_full_backup_import(payload)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    full_import_errors = [f"No pude leer el JSON: {exc}"]
+                if full_import_errors:
+                    for error in full_import_errors[:8]:
+                        st.warning(error)
+                else:
+                    st.success("Respaldo válido.")
+                    st.caption(
+                        f"Tareas: {len(imported_full_backup.get('todo_items', []))} · "
+                        f"Eventos: {len(imported_full_backup.get('events', []))} · "
+                        f"Hábitos: {len(imported_full_backup.get('habits', []))} · "
+                        f"Horario: {len(imported_full_backup.get('availability', []))} bloques"
+                    )
+            if st.button(
+                "Importar todos mis datos",
+                width="stretch",
+                disabled=not (uploaded_full_backup and imported_full_backup and confirm_full_import),
+                key="account_import_full_backup_button",
+            ):
+                create_backup(store, "before_full_backup_import")
+                apply_full_backup_import(store, imported_full_backup)
+                save_store(store)
+                st.session_state["full_backup_import_success"] = "Datos importados en esta cuenta."
+                st.rerun()
+
+        full_backup_message = st.session_state.pop("full_backup_import_success", None)
+        if full_backup_message:
+            st.success(full_backup_message)
+
+        st.download_button(
             "Descargar horario",
             schedule_export_json(store),
             file_name="horario.json",
@@ -2344,6 +2537,8 @@ def sidebar_profile(store):
                     )
                     submitted = st.form_submit_button("Actualizar contraseña", width="stretch")
                 if submitted:
+                    from academic_planning.auth import UserRegistry
+
                     registry = UserRegistry(DATA_DIR / "auth" / "users.json")
                     _, error = registry.change_password_confirmed(
                         active_user.get("user_id"),
@@ -2382,6 +2577,22 @@ def sidebar_profile(store):
         else:
             st.caption("No hay datos de demostración activos en esta cuenta.")
 
+        confirm_demo_restore = st.checkbox(
+            "Confirmo que quiero restaurar los datos demo",
+            key="account_confirm_restore_sample_data",
+        )
+        if st.button(
+            "Restaurar datos demo",
+            width="stretch",
+            disabled=not confirm_demo_restore,
+            key="account_restore_sample_data_button",
+        ):
+            create_backup(store, "before_restore_sample_data")
+            sample = apply_sample_data(store)
+            save_store(store)
+            st.success(f"Datos de demostración restaurados: {sum(len(items) for items in sample.values())}.")
+            st.rerun()
+
         if active_user.get("user_id"):
             with st.expander("Eliminar cuenta", expanded=False):
                 st.warning("Esta acción eliminará tu cuenta y todos tus datos. No se puede deshacer.")
@@ -2401,6 +2612,8 @@ def sidebar_profile(store):
                     disabled=not can_delete,
                     key="account_delete_button",
                 ):
+                    from academic_planning.auth import UserRegistry, logout_session
+
                     registry = UserRegistry(DATA_DIR / "auth" / "users.json")
                     deleted_user, error = registry.delete_account(active_user.get("user_id"), current_password)
                     if error:

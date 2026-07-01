@@ -2,7 +2,7 @@
 
 import streamlit as st
 
-from academic_planning.auth import UserRegistry, login_session, logout_session
+from academic_planning.auth import UserRegistry, active_session_user, login_session, logout_session
 from ui.shared import (
     AUTH_DISPLAY_MODES,
     apply_sample_data,
@@ -25,6 +25,8 @@ def password_input(label, key, help_text=None):
 
 
 def render_auth_screen(registry_path):
+    if active_session_user(st.session_state):
+        return
     st.markdown(
         '<div class="app-title">Academic Planning Crew</div>',
         unsafe_allow_html=True,

@@ -1,4 +1,4 @@
-# Academic Planning Crew
+﻿# Academic Planning Crew
 
 Aplicación local en Streamlit para organizar clases, pendientes, eventos, hábitos,
 metas y progreso académico. Incluye un asistente de planificación que puede usar
@@ -114,10 +114,13 @@ barra lateral.
 La sección **Cuenta** de la barra lateral concentra opciones personales:
 
 - Tema claro u oscuro.
+- **Descargar todos mis datos** en `academic_planning_backup.json`.
+- **Importar todos mis datos** desde `academic_planning_backup.json`, con validación, advertencia de sobrescritura y respaldo automático previo.
 - **Descargar horario** en `horario.json`.
 - **Importar horario** desde `horario.json`, con validación y confirmación.
 - **Borrar datos de demostración**, cuando la cuenta contiene datos de ejemplo.
 - **Cambiar contraseña**, validando la contraseña actual y guardando un hash
+- **Restaurar datos demo**, para volver a cargar ejemplos si fueron eliminados.
   PBKDF2-HMAC-SHA256 nuevo con salt aleatorio.
 - **Eliminar cuenta**, con confirmación escrita, contraseña actual, cierre de
   sesión y respaldo final de la carpeta del usuario.
@@ -147,6 +150,9 @@ las secciones principales:
 Cada elemento de demostración se marca internamente como demo. Desde **Cuenta →
 Datos de demostración → Borrar datos de demostración** se eliminan solo esos
 elementos del usuario actual. Los datos creados manualmente se conservan.
+
+Si borras los ejemplos y luego quieres verlos otra vez, usa **Cuenta -> Restaurar datos demo**.
+La app crea un respaldo antes de restaurarlos y los carga solo en la cuenta actual.
 
 ## Chat / Agentes
 
@@ -227,6 +233,30 @@ Para importar, usa **Cuenta → Importar horario**, selecciona un `horario.json`
 compatible y marca la confirmación. Por defecto se agrega al horario actual; si
 activas **Reemplazar mi horario actual**, la app crea un respaldo antes de
 sustituirlo.
+
+## Exportar e importar todos mis datos
+
+Desde **Cuenta -> Descargar todos mis datos** se genera:
+
+```text
+academic_planning_backup.json
+```
+
+El respaldo incluye solo la información del usuario actual: tareas, eventos,
+hábitos, horario, progreso, preferencias, metas, memoria, estadísticas derivadas
+y configuración relevante. No incluye contraseñas, hashes, sales, tokens, API
+keys, registros internos de autenticación ni datos de otros usuarios.
+
+Para restaurar, usa **Cuenta -> Importar todos mis datos**, selecciona
+`academic_planning_backup.json` y marca la confirmación. La app valida la
+estructura antes de habilitar la importación, muestra una advertencia clara
+porque se sobrescriben los datos de esa cuenta, crea un respaldo automático de
+la cuenta actual y luego importa el contenido solo en el usuario conectado.
+
+Esto es útil en Streamlit Cloud porque el almacenamiento local de la app puede
+reiniciarse al redeployar o cambiar de entorno. Descargar este archivo permite
+guardar una copia personal y restaurarla en la misma cuenta sin afectar a otras
+personas.
 
 ## Tema y modo oscuro
 
@@ -499,3 +529,4 @@ tablas.
 - Sin sincronización externa ni notificaciones.
 - La lectura de imágenes y el flujo generativo requieren una API key válida.
 - Parte de la interfaz continúa centralizada en `ui/shared.py`.
+

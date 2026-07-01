@@ -16,6 +16,13 @@ from academic_planning.tools.database_tool import read_json, write_json
 PBKDF2_ITERATIONS = 310_000
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _registry_lock = threading.RLock()
+AUTH_SESSION_KEYS = {
+    "auth_user",
+    "auth_authenticated",
+    "current_user_id",
+    "current_user_email",
+    "current_user_name",
+}
 
 
 def normalize_email(email):
@@ -169,8 +176,31 @@ def public_user(user):
 
 
 def login_session(session, user):
-    session["auth_user"] = dict(user)
+    public = dict(user)
+    session["auth_user"] = public
+    session["auth_authenticated"] = True
+    session["current_user_id"] = public.get("user_id")
+    session["current_user_email"] = public.get("email")
+    session["current_user_name"] = public.get("display_name")
+
+
+def active_session_user(session):
+    user = session.get("auth_user")
+    if isinstance(user, dict) and user.get("user_id"):
+        return user
+    user_id = session.get("current_user_id")
+    email = session.get("current_user_email")
+    if session.get("auth_authenticated") and user_id and email:
+        restored = {
+            "user_id": user_id,
+            "email": email,
+            "display_name": session.get("current_user_name") or email,
+        }
+        session["auth_user"] = restored
+        return restored
+    return None
 
 
 def logout_session(session):
-    session.clear()
+    for key in AUTH_SESSION_KEYS:
+        session.pop(key, None)

@@ -11,6 +11,7 @@ from ui.shared import (
     save_store,
     sidebar_profile,
 )
+from academic_planning.auth import active_session_user
 from ui import auth, calendar, dashboard, habits, memory, planner, progress
 
 
@@ -43,7 +44,7 @@ def render_header(store):
 
 def main():
     apply_css()
-    user = st.session_state.get("auth_user")
+    user = active_session_user(st.session_state)
     if not user:
         auth.render_auth_screen(DATA_DIR / "auth" / "users.json")
         return
